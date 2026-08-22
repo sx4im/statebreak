@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "statebreak"
+version = "0.1.0"
+description = "Deterministic failure laboratory for AI agents: inject stale state, expired approvals, timeouts, and duplicate retries"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "StateBreak contributors"}]
+keywords = [
+    "ai-agents",
+    "agent-testing",
+    "chaos-engineering",
+    "fault-injection",
+    "deterministic-testing",
+    "stale-state",
+    "idempotency",
+    "evals",
+    "sarif",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = ["PyYAML>=6.0", "jsonschema>=4.20"]
+
+[project.urls]
+Homepage = "https://github.com/statebreak/statebreak"
+Documentation = "https://github.com/statebreak/statebreak#documentation"
+Repository = "https://github.com/statebreak/statebreak"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.10", "build>=1.2"]
+
+[project.scripts]
+statebreak = "statebreak.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/statebreak"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["jsonschema", "yaml"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

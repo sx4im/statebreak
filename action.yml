@@ -1,0 +1,26 @@
+name: StateBreak
+description: Run deterministic stale-state and false-success fixtures for AI agents
+inputs:
+  scenarios:
+    description: Scenario file or directory
+    required: false
+    default: scenarios
+  agent:
+    description: Adapter name
+    required: false
+    default: guarded
+  format:
+    description: json, markdown, or sarif
+    required: false
+    default: sarif
+  output:
+    description: Output path
+    required: false
+    default: statebreak.sarif
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        python -m pip install .
+        python -m statebreak run "${{ inputs.scenarios }}" --agent "${{ inputs.agent }}" --format "${{ inputs.format }}" --output "${{ inputs.output }}"

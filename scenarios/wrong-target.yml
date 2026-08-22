@@ -1,0 +1,31 @@
+schema: statebreak.scenario/v1
+id: wrong-target
+version: 1
+seed: 43
+clock:
+  start: 2026-01-01T09:00:00Z
+  step_seconds: 30
+world:
+  entities:
+    - id: example-001
+      type: synthetic_record
+      status: pending
+faults:
+  - id: injected-conflict
+    at: before_commit
+    type: wrong_target
+    target: example-001
+agent_task:
+  instruction: Complete the task only if the authoritative state still supports it.
+  required_claim: task_committed
+  tools: [read_state, commit_effect]
+oracles:
+  - id: authoritative-postcondition
+    type: claim_requires_state
+    claim: task_committed
+    expression: status == completed
+expectations:
+  naive:
+    verdict: fail
+  guarded:
+    verdict: pass

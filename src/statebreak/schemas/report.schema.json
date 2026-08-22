@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://statebreak.dev/schemas/report.schema.json",
+  "type": "object",
+  "required": [
+    "schema",
+    "run_id",
+    "scenario_id",
+    "verdict",
+    "findings",
+    "metrics"
+  ],
+  "properties": {
+    "schema": {
+      "const": "statebreak.report/v1"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "scenario_id": {
+      "type": "string"
+    },
+    "scenario_hash": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "needs_review",
+        "error"
+      ]
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "findings": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": true
+}
