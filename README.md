@@ -2,9 +2,11 @@
 
 > Deterministic failure laboratory for AI agents: inject stale state, expired approvals, timeouts, duplicate retries, wrong targets, and broken handoffs—then verify authoritative outcomes locally.
 
-<!-- CI badge: re-add once the repository is published at github.com/statebreak/statebreak -->
+<!-- CI badge: add once a CI workflow exists -->
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+**Repository:** [github.com/sx4im/statebreak](https://github.com/sx4im/statebreak)
 
 StateBreak tests how autonomous AI agents behave when stateful systems fail around them. It injects deterministic state drift, expired approvals, ambiguous commit timeouts, duplicate retries, and corrupted task handoffs without live cloud costs, real side effects, or model API calls.
 
