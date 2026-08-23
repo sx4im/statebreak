@@ -1,4 +1,9 @@
-"""Deterministic naive reference adapter demonstrating unverified agent execution."""
+"""Deterministic naive reference adapter demonstrating unverified agent execution.
+
+DEMO-ONLY: this adapter targets scenario task param ``target_entity`` (or the
+bundled demo entities ``example-001``/``order-001``). It intentionally models
+unsafe behaviors; it is a teaching example, not a production adapter.
+"""
 
 from __future__ import annotations
 
@@ -30,8 +35,13 @@ class NaiveAdapter(AgentAdapter):
 
     def run(self, context: AdapterContext) -> AdapterResult:
         """Execute task naively, trusting local responses without freshness checks."""
-        # 1. Target selection: try example-001 first, fallback to order-001
-        target = "example-001"
+        # 1. Target selection: scenario task params first (``target_entity``),
+        # then demo fallbacks example-001 -> order-001.
+        target = str(
+            context.task_params.get("target_entity")
+            or context.task_params.get("target")
+            or "example-001"
+        )
         updates: dict[str, Any] = {"status": "completed"}
         op_id = f"op_naive_{self._step_counter}"
         self._step_counter += 1
@@ -40,6 +50,7 @@ class NaiveAdapter(AgentAdapter):
         if context.gateway:
             obs = context.gateway.read("read_state", target, node_id=context.node_id)
             if obs.data is None:
+                # Demo fallback for bundled scenarios.
                 target = "order-001"
                 obs = context.gateway.read("read_state", target, node_id=context.node_id)
 

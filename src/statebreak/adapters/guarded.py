@@ -1,4 +1,10 @@
-"""Deterministic guarded reference adapter demonstrating verified convergence."""
+"""Deterministic guarded reference adapter demonstrating verified convergence.
+
+DEMO-ONLY: this adapter targets scenario task param ``target_entity`` (or the
+bundled demo entities ``example-001``/``order-001``) and reconciles against
+``status == completed``. It is a teaching example of guarded behaviors, not a
+general-purpose production adapter. See docs/custom-adapters.md.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +35,14 @@ class GuardedAdapter(AgentAdapter):
 
     def run(self, context: AdapterContext) -> AdapterResult:
         """Execute task with freshness checks, version locking, and reconciliation."""
-        target = "example-001"
+        # Target resolution: scenario task params first (``target_entity``),
+        # then the bundled demo entities. Custom scenarios should declare
+        # ``agent_task: {params: {target_entity: <id>}}``.
+        target = str(
+            context.task_params.get("target_entity")
+            or context.task_params.get("target")
+            or "example-001"
+        )
         updates: dict[str, Any] = {"status": "completed"}
         final_status = "completed"
 
@@ -46,6 +59,8 @@ class GuardedAdapter(AgentAdapter):
         # 1. Fresh read immediately before action
         obs = context.gateway.read("read_state", target, node_id=context.node_id)
         if obs.data is None:
+            # Demo fallback for bundled scenarios whose primary entity is an
+            # approval/order rather than a synthetic_record.
             target = "order-001"
             obs = context.gateway.read("read_state", target, node_id=context.node_id)
 

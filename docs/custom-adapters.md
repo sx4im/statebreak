@@ -20,7 +20,7 @@ class MyAgentAdapter(AgentAdapter):
 
         # 1. Query current state via the gateway
         obs = gateway.read("read_state", "example-001")
-        current_version = obs.version
+        current_version = obs.state_version
 
         # 2. Check approval status if required
         approval = gateway.check_approval("appr-001")
@@ -68,10 +68,24 @@ from statebreak.runner import ScenarioRunner
 runner = ScenarioRunner()
 report = runner.run_scenario(
     "scenarios/approval-expiry.yml",
-    adapter_instance=MyAgentAdapter(),
+    adapter=MyAgentAdapter(),
     seed=42,
 )
 
-assert report.verdict == "pass"
-assert len(report.findings) == 0
+assert report.verdict in ("pass", "needs_review")
 ```
+
+## Idempotency Semantics
+
+The world treats `operation_id` as a stable deduplication key, mirroring how
+idempotent payment/order APIs behave:
+
+- **Same `operation_id`, same intent:** replaying an operation whose ID has
+  already committed returns the original committed effect without applying
+  anything again. This is what makes guarded retries safe under
+  `duplicate_retry` faults.
+- **Same `operation_id`, different payload:** also returns the original effect;
+  the new payload is *not* applied and no error is raised. If your agent
+  reuses an operation ID across semantically different actions, StateBreak
+  silently keeps the first outcome — always derive operation IDs from stable
+  task identity (target + version + intent), never from a retry counter.

@@ -29,7 +29,13 @@ class MultiNodeAdapter(AgentAdapter):
 
     def run(self, context: AdapterContext) -> AdapterResult:
         """Execute coordinating task across message queue and gateway."""
-        target = "shared-doc-01"
+        # Target resolution: scenario task params first (``target_entity``),
+        # then the bundled demo entity.
+        target = str(
+            context.task_params.get("target_entity")
+            or context.task_params.get("target")
+            or "shared-doc-01"
+        )
         updates: dict[str, Any] = {"status": "synced"}
         final_status = "completed"
         peer_updated = False

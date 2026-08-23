@@ -9,16 +9,16 @@ from statebreak.errors import StateBreakError
 from statebreak.models import AdapterResult, AgentClaim
 
 __all__ = [
-    "AdapterError",
-    "ToolRequest",
-    "ToolObservation",
-    "ToolOutcome",
-    "HandoffPayload",
-    "CoordinationMessage",
     "AdapterContext",
+    "AdapterError",
+    "AdapterResult",
     "AgentAdapter",
     "AgentClaim",
-    "AdapterResult",
+    "CoordinationMessage",
+    "HandoffPayload",
+    "ToolObservation",
+    "ToolOutcome",
+    "ToolRequest",
 ]
 
 
@@ -129,6 +129,7 @@ class AdapterContext:
         scenario_id: str = "scenario_default",
         seed: int = 42,
         coordination: Any | None = None,
+        task_params: dict[str, Any] | None = None,
     ) -> None:
         self.task_instruction = task_instruction
         self.allowed_tools = allowed_tools
@@ -139,6 +140,7 @@ class AdapterContext:
         self.scenario_id = scenario_id
         self.seed = seed
         self.coordination = coordination
+        self.task_params: dict[str, Any] = dict(task_params) if task_params else {}
         self._claims: list[AgentClaim] = []
 
     @property

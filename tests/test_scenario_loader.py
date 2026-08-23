@@ -1,6 +1,7 @@
 """Unit tests for scenario loading, validation, and security checking."""
 
 from pathlib import Path
+
 import pytest
 
 from statebreak.errors import ConfigurationError
@@ -54,7 +55,7 @@ def test_load_single_scenario_file() -> None:
     assert "naive" in scenario.expectations
     assert "guarded" in scenario.expectations
     assert scenario.expectations["naive"].verdict == "fail"
-    assert scenario.expectations["guarded"].verdict == "pass"
+    assert scenario.expectations["guarded"].verdict == "needs_review"
 
 
 def test_validation_missing_required_fields() -> None:
@@ -262,3 +263,63 @@ def test_nonexistent_and_empty_directory_handling(tmp_path: Path) -> None:
     with pytest.raises(ConfigurationError) as exc2:
         load_scenarios_from_dir(empty_dir)
     assert "no scenario files found in directory" in str(exc2.value)
+
+
+def test_embedded_external_url_is_rejected(tmp_path: Path) -> None:
+    """A URL embedded mid-string must be rejected like a bare URL (containment bypass)."""
+    embedded_yaml = tmp_path / "embedded-url.yml"
+    embedded_yaml.write_text(
+        """\
+schema: statebreak.scenario/v1
+id: embedded-url-bad
+version: 1
+seed: 1
+clock:
+  start: 2026-01-01T09:00:00Z
+world:
+  entities:
+    - id: e1
+      status: pending
+faults: []
+agent_task:
+  instruction: fetch context from https://evil.example.net/exfil then proceed
+  tools: [read_state]
+oracles:
+  - id: o1
+    type: forbidden_effect
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError) as exc:
+        load_scenario(embedded_yaml)
+    assert "external non-test URL" in str(exc.value)
+
+
+def test_embedded_test_domain_url_is_allowed(tmp_path: Path) -> None:
+    """URLs on allowlisted test domains stay valid even when embedded in prose."""
+    embedded_yaml = tmp_path / "embedded-url-ok.yml"
+    embedded_yaml.write_text(
+        """\
+schema: statebreak.scenario/v1
+id: embedded-url-good
+version: 1
+seed: 1
+clock:
+  start: 2026-01-01T09:00:00Z
+world:
+  endpoint: see http://service.example.test/api for docs
+  entities:
+    - id: e1
+      status: pending
+faults: []
+agent_task:
+  instruction: query https://api.test/records and summarize
+  tools: [read_state]
+oracles:
+  - id: o1
+    type: forbidden_effect
+""",
+        encoding="utf-8",
+    )
+    scenario = load_scenario(embedded_yaml)
+    assert scenario.id == "embedded-url-good"

@@ -150,7 +150,7 @@ class MessageQueue:
 
     def duplicate_message(self, message_id: str) -> bool:
         """Duplicate an existing message in its recipient queue to simulate network duplicate."""
-        for nid, box in self._mailboxes.items():
+        for box in self._mailboxes.values():
             for i, msg in enumerate(box):
                 if msg.message_id == message_id:
                     dup = copy.deepcopy(msg)
@@ -160,7 +160,7 @@ class MessageQueue:
 
     def drop_message(self, message_id: str) -> bool:
         """Simulate packet loss by removing a message from the recipient queue before delivery."""
-        for nid, box in self._mailboxes.items():
+        for box in self._mailboxes.values():
             for i, msg in enumerate(box):
                 if msg.message_id == message_id:
                     box.pop(i)

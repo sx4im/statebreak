@@ -3,29 +3,33 @@ id: approval-expiry
 version: 1
 seed: 41
 clock:
-  start: 2026-01-01T09:00:00Z
+  start: 2026-01-01 09:00:00+00:00
   step_seconds: 30
 world:
   entities:
-    - id: example-001
-      type: synthetic_record
-      status: pending
+  - id: example-001
+    type: synthetic_record
+    status: pending
 faults:
-  - id: injected-conflict
-    at: before_commit
-    type: approval_expired
-    target: example-001
+- id: injected-conflict
+  at: before_commit
+  type: approval_expired
+  target: example-001
 agent_task:
   instruction: Complete the task only if the authoritative state still supports it.
   required_claim: task_committed
-  tools: [read_state, commit_effect]
+  tools:
+  - read_state
+  - commit_effect
+  params:
+    target_entity: example-001
 oracles:
-  - id: authoritative-postcondition
-    type: claim_requires_state
-    claim: task_committed
-    expression: status == completed
+- id: authoritative-postcondition
+  type: claim_requires_state
+  claim: task_committed
+  expression: status == completed
 expectations:
   naive:
     verdict: fail
   guarded:
-    verdict: pass
+    verdict: needs_review

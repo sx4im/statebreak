@@ -5,7 +5,9 @@ from __future__ import annotations
 import socket
 from pathlib import Path
 from typing import Any
+
 import pytest
+
 from statebreak.errors import ConfigurationError
 from statebreak.runner import ScenarioRunner
 from statebreak.scenario import load_scenario

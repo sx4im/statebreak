@@ -10,12 +10,25 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NoReturn
 
+import jsonschema
+
 from statebreak import __version__
-from statebreak.errors import StateBreakError, UsageError
+from statebreak.errors import ConfigurationError, StateBreakError, UsageError
 from statebreak.models import Finding, RunReport
 from statebreak.report import render_json, render_markdown, render_sarif
 from statebreak.runner import ScenarioRunner
-from statebreak.scenario import load_scenario
+from statebreak.scenario import _find_schema_path, load_scenario
+
+
+def _load_report_schema() -> dict[str, Any]:
+    """Load the bundled report.schema.json for validating re-rendered reports."""
+    schema_path = _find_schema_path().parent / "report.schema.json"
+    if not schema_path.exists():
+        # Fall back to repo-root layout when running from a source checkout.
+        schema_path = _find_schema_path().parents[1] / "schemas" / "report.schema.json"
+    with open(schema_path, "r", encoding="utf-8") as f:
+        data: dict[str, Any] = json.load(f)
+        return data
 
 
 class StateBreakArgumentParser(argparse.ArgumentParser):
@@ -169,7 +182,7 @@ def handle_validate(path_str: str, as_json: bool = False) -> int:
             results.append({"path": str(f), "id": sc.id, "valid": True})
             if not as_json:
                 sys.stdout.write(f"✓ {f}: valid scenario (id: {sc.id})\n")
-        except Exception as e:
+        except ConfigurationError as e:
             has_errors = True
             results.append({"path": str(f), "valid": False, "error": str(e)})
             if not as_json:
@@ -199,8 +212,10 @@ def handle_list(path_str: str, as_json: bool = False) -> int:
                     "faults": fault_types,
                     "oracles": [o.type for o in sc.oracles],
                 })
-            except Exception:
-                continue
+            except ConfigurationError as e:
+                # `list` is a discovery view: skip unreadable scenario files
+                # instead of failing the whole listing.
+                sys.stderr.write(f"warning: skipping {f}: {e}\n")
 
     adapters = [
         {"name": "guarded", "description": "Guarded adapter with freshness & reconciliation"},
@@ -258,12 +273,29 @@ def handle_run(
 
 
 def handle_report(report_path: str, fmt: str, output_file: str | None) -> int:
-    """Re-render a JSON report file."""
+    """Re-render a JSON report file after validating it against the report schema."""
     p = Path(report_path)
     if not p.exists():
         raise UsageError(f"report file not found: {report_path}")
 
     raw_data = json.loads(p.read_text(encoding="utf-8"))
+
+    if not isinstance(raw_data, dict):
+        raise UsageError(f"report file must contain a JSON object: {report_path}")
+
+    # Validate against the bundled report schema before reconstructing, so
+    # malformed reports fail loudly instead of silently rendering defaults.
+    schema = _load_report_schema()
+    try:
+        jsonschema.validate(instance=raw_data, schema=schema)
+    except jsonschema.ValidationError as err:
+        loc = f" at {err.json_path}" if getattr(err, "json_path", "$") != "$" else ""
+        raise UsageError(
+            f"invalid StateBreak report{loc}: {err.message}"
+        ) from err
+    except jsonschema.SchemaError as err:
+        raise UsageError(f"invalid report JSON schema: {err.message}") from err
+
     findings_list = tuple(
         Finding(
             finding_id=f.get("finding_id", ""),
@@ -407,7 +439,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             traceback.print_exc(file=sys.stderr)
         return err.exit_code
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - top-level CLI boundary
         if debug_mode:
             traceback.print_exc(file=sys.stderr)
         else:

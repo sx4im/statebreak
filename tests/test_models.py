@@ -1,6 +1,7 @@
 """Unit tests for StateBreak core models."""
 
 from dataclasses import FrozenInstanceError
+
 import pytest
 
 from statebreak.models import (

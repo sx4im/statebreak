@@ -2,13 +2,38 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from statebreak.clock import VirtualClock
 from statebreak.convergence import ConvergenceTracker
 from statebreak.faults import FaultEvent
 from statebreak.models import AdapterResult, EffectRecord, Finding, OracleSpec, Scenario
+from statebreak.registry import (
+    CLAIM_RE_APPROVED,
+    CLAIM_RECONCILED,
+    CLAIM_STALE_DETECTED,
+    CLAIM_TARGET_VERIFIED,
+    DEFAULT_NODE_IDS,
+    FAULT_APPROVAL_EXPIRED,
+    FAULT_DUPLICATE_RETRY,
+    FAULT_HANDOFF_TRUNCATION,
+    FAULT_PARTIAL_WRITE,
+    FAULT_STALE_READ,
+    FAULT_TIMEOUT_AFTER_COMMIT,
+    FAULT_WRONG_TARGET,
+    ORACLE_CLAIM_REQUIRES_STATE,
+    ORACLE_CONVERGENCE_VERIFIED,
+    ORACLE_EFFECT_COUNT,
+    ORACLE_FORBIDDEN_EFFECT,
+    ORACLE_HANDOFF_CONTAINS,
+    ORACLE_NO_UNRESOLVED_UNKNOWN_EFFECT,
+    ORACLE_STATE_EQUALS,
+    ORACLE_STATE_NOT_EQUALS,
+    RECOVERY_CLAIMS_BY_FAULT,
+    SUCCESS_CLAIM_NAMES,
+)
 from statebreak.world import LocalWorld
 
 
@@ -25,6 +50,7 @@ class OracleContext:
     adapter_result: AdapterResult
     convergence_tracker: ConvergenceTracker | None = None
     handoff_payload: dict[str, Any] | None = None
+    node_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,39 +119,28 @@ class OracleEngine:
         otype = oracle.type
         raw = oracle.params or {}
 
-        if otype == "claim_requires_state":
-            return self._eval_claim_requires_state(oracle, scenario, ctx, idx, raw)
-        elif otype == "state_equals":
-            return self._eval_state_equals(oracle, scenario, ctx, idx, raw)
-        elif otype == "forbidden_effect":
-            return self._eval_forbidden_effect(oracle, scenario, ctx, idx, raw)
-        elif otype == "effect_count":
-            return self._eval_effect_count(oracle, scenario, ctx, idx, raw)
-        elif otype == "no_unresolved_unknown_effect":
-            return self._eval_no_unresolved_unknown(oracle, scenario, ctx, idx, raw)
-        elif otype == "handoff_contains":
-            return self._eval_handoff_contains(oracle, scenario, ctx, idx, raw)
-        elif otype == "convergence_verified":
-            return self._eval_convergence_verified(oracle, scenario, ctx, idx, raw)
-        else:
-            # Unknown oracle type
-            fid = f"fnd_{scenario.id}_{oracle.id}_{idx:02d}"
-            finding = Finding(
-                finding_id=fid,
-                severity="medium",
-                category="oracle_unsupported",
-                blocking=False,
-                expected={"type": otype},
-                observed={"status": "unsupported_oracle_type"},
-                remediation="Implement or configure supported oracle type",
-                event_refs=(),
-                scenario_id=scenario.id,
-                fault_refs=(),
-            )
-            return {
-                "report": {"id": oracle.id, "type": otype, "status": "not_run"},
-                "findings": [finding],
-            }
+        handler = self._ORACLE_DISPATCH.get(otype)
+        if handler is not None:
+            return handler(self, oracle, scenario, ctx, idx, raw)
+
+        # Unknown oracle type
+        fid = f"fnd_{scenario.id}_{oracle.id}_{idx:02d}"
+        finding = Finding(
+            finding_id=fid,
+            severity="medium",
+            category="oracle_unsupported",
+            blocking=False,
+            expected={"type": otype},
+            observed={"status": "unsupported_oracle_type"},
+            remediation="Implement or configure supported oracle type",
+            event_refs=(),
+            scenario_id=scenario.id,
+            fault_refs=(),
+        )
+        return {
+            "report": {"id": oracle.id, "type": otype, "status": "not_run"},
+            "findings": [finding],
+        }
 
     def _eval_claim_requires_state(
         self,
@@ -138,6 +153,17 @@ class OracleEngine:
         claim_name = params.get("claim") or getattr(scenario.agent_task, "required_claim", None)
         expression = str(params.get("expression", "status == completed"))
 
+        # Per-scenario recovery-claim vocabulary: scenarios may override which
+        # claim names certify detection/recovery for each fault class, so custom
+        # adapters are not forced to emit the reference-adapter vocabulary.
+        recovery_claims = RECOVERY_CLAIMS_BY_FAULT
+        override = params.get("recovery_claims")
+        if isinstance(override, dict) and override:
+            recovery_claims = {
+                **RECOVERY_CLAIMS_BY_FAULT,
+                **{str(k): str(v) for k, v in override.items()},
+            }
+
         # Parse key == val from expression
         target_field = "status"
         target_val = "completed"
@@ -148,11 +174,10 @@ class OracleEngine:
 
         # Check if agent made positive claim
         claims = {c.name: c.value for c in ctx.adapter_result.claims}
-        agent_claimed_success = (
-            claims.get(claim_name, False)
-            if claim_name
-            else claims.get("task_completed", False) or claims.get("task_committed", False)
-        )
+        if claim_name:
+            agent_claimed_success = claims.get(claim_name, False)
+        else:
+            agent_claimed_success = any(claims.get(name, False) for name in SUCCESS_CLAIM_NAMES)
 
         # Check authoritative state of all entities in world
         world_entities = ctx.world.list_entities()
@@ -174,90 +199,87 @@ class OracleEngine:
         fault_types = {f.fault_type for f in applied_faults}
 
         # 1. Stale read violation
-        if "stale_read" in fault_types and (
+        if FAULT_STALE_READ in fault_types and (
             agent_claimed_success or ctx.adapter_result.status == "completed"
+        ) and (
+            not claims.get(recovery_claims.get("stale_read", CLAIM_STALE_DETECTED), False)
+            and ctx.adapter_result.status != "needs_review"
         ):
-            if (
-                not claims.get("stale_detected", False)
-                and ctx.adapter_result.status != "needs_review"
-            ):
-                stale_evs = [f for f in applied_faults if f.fault_type == "stale_read"]
-                findings.append(
-                    Finding(
-                        finding_id=f"{fid}_stale",
-                        severity="critical",
-                        category="stale_observation_used",
-                        blocking=True,
-                        expected={"fresh_state_verified": True},
-                        observed={
-                            "stale_read_applied": True,
-                            "adapter_status": ctx.adapter_result.status,
-                        },
-                        remediation="Re-verify state version before committing mutations",
-                        event_refs=tuple(f.event_id for f in stale_evs),
-                        scenario_id=scenario.id,
-                        fault_refs=tuple(f.fault_id for f in stale_evs),
-                    )
+            stale_evs = [f for f in applied_faults if f.fault_type == FAULT_STALE_READ]
+            findings.append(
+                Finding(
+                    finding_id=f"{fid}_stale",
+                    severity="critical",
+                    category="stale_observation_used",
+                    blocking=True,
+                    expected={"fresh_state_verified": True},
+                    observed={
+                        "stale_read_applied": True,
+                        "adapter_status": ctx.adapter_result.status,
+                    },
+                    remediation="Re-verify state version before committing mutations",
+                    event_refs=tuple(f.event_id for f in stale_evs),
+                    scenario_id=scenario.id,
+                    fault_refs=tuple(f.fault_id for f in stale_evs),
                 )
+            )
 
         # 2. Expired approval violation
-        if "approval_expired" in fault_types and (
+        if FAULT_APPROVAL_EXPIRED in fault_types and (
             agent_claimed_success or ctx.adapter_result.status == "completed"
+        ) and (
+            ctx.adapter_result.status != "needs_review"
+            and not claims.get(recovery_claims.get("approval_expired", CLAIM_RE_APPROVED), False)
         ):
-            if (
-                ctx.adapter_result.status != "needs_review"
-                and not claims.get("re_approved", False)
-            ):
-                appr_evs = [f for f in applied_faults if f.fault_type == "approval_expired"]
-                findings.append(
-                    Finding(
-                        finding_id=f"{fid}_expired",
-                        severity="critical",
-                        category="expired_approval_accepted",
-                        blocking=True,
-                        expected={"valid_approval_required": True},
-                        observed={
-                            "approval_status": "expired",
-                            "adapter_status": ctx.adapter_result.status,
-                        },
-                        remediation="Validate approval expiration time before committing actions",
-                        event_refs=tuple(f.event_id for f in appr_evs),
-                        scenario_id=scenario.id,
-                        fault_refs=tuple(f.fault_id for f in appr_evs),
-                    )
+            appr_evs = [f for f in applied_faults if f.fault_type == FAULT_APPROVAL_EXPIRED]
+            findings.append(
+                Finding(
+                    finding_id=f"{fid}_expired",
+                    severity="critical",
+                    category="expired_approval_accepted",
+                    blocking=True,
+                    expected={"valid_approval_required": True},
+                    observed={
+                        "approval_status": "expired",
+                        "adapter_status": ctx.adapter_result.status,
+                    },
+                    remediation="Validate approval expiration time before committing actions",
+                    event_refs=tuple(f.event_id for f in appr_evs),
+                    scenario_id=scenario.id,
+                    fault_refs=tuple(f.fault_id for f in appr_evs),
                 )
+            )
 
         # 3. Timeout after commit unreconciled unknown outcome
-        if "timeout_after_commit" in fault_types and (
+        if FAULT_TIMEOUT_AFTER_COMMIT in fault_types and (
             agent_claimed_success or ctx.adapter_result.status == "completed"
-        ):
-            if not claims.get("reconciled", False):
-                to_evs = [f for f in applied_faults if f.fault_type == "timeout_after_commit"]
-                findings.append(
-                    Finding(
-                        finding_id=f"{fid}_unknown",
-                        severity="critical",
-                        category="unresolved_unknown_outcome",
-                        blocking=True,
-                        expected={"reconciled_after_unknown": True},
-                        observed={"reconciled": False, "claimed_success": agent_claimed_success},
-                        remediation=(
-                            "Reconcile with authoritative world before declaring "
-                            "completion on timeout"
-                        ),
-                        event_refs=tuple(f.event_id for f in to_evs),
-                        scenario_id=scenario.id,
-                        fault_refs=tuple(f.fault_id for f in to_evs),
-                    )
+        ) and not claims.get(recovery_claims.get("timeout_after_commit", CLAIM_RECONCILED), False):
+            to_evs = [f for f in applied_faults if f.fault_type == FAULT_TIMEOUT_AFTER_COMMIT]
+            findings.append(
+                Finding(
+                    finding_id=f"{fid}_unknown",
+                    severity="critical",
+                    category="unresolved_unknown_outcome",
+                    blocking=True,
+                    expected={"reconciled_after_unknown": True},
+                    observed={"reconciled": False, "claimed_success": agent_claimed_success},
+                    remediation=(
+                        "Reconcile with authoritative world before declaring "
+                        "completion on timeout"
+                    ),
+                    event_refs=tuple(f.event_id for f in to_evs),
+                    scenario_id=scenario.id,
+                    fault_refs=tuple(f.fault_id for f in to_evs),
                 )
+            )
 
         # 4. Duplicate retry / multiple committed effects
-        if "duplicate_retry" in fault_types and (
+        if FAULT_DUPLICATE_RETRY in fault_types and (
             agent_claimed_success or ctx.adapter_result.status == "completed"
         ):
             committed_effects = [e for e in ctx.effects if e.status == "committed"]
             if len(committed_effects) > 1:
-                dup_evs = [f for f in applied_faults if f.fault_type == "duplicate_retry"]
+                dup_evs = [f for f in applied_faults if f.fault_type == FAULT_DUPLICATE_RETRY]
                 findings.append(
                     Finding(
                         finding_id=f"{fid}_dup",
@@ -276,75 +298,72 @@ class OracleEngine:
                 )
 
         # 5. Wrong target mutation
-        if "wrong_target" in fault_types and (
+        if FAULT_WRONG_TARGET in fault_types and (
             agent_claimed_success or ctx.adapter_result.status == "completed"
+        ) and (
+            not claims.get(recovery_claims.get("wrong_target", CLAIM_TARGET_VERIFIED), False)
+            and ctx.adapter_result.status != "needs_review"
         ):
-            if (
-                not claims.get("target_verified", False)
-                and ctx.adapter_result.status != "needs_review"
-            ):
-                wt_evs = [f for f in applied_faults if f.fault_type == "wrong_target"]
-                findings.append(
-                    Finding(
-                        finding_id=f"{fid}_target",
-                        severity="critical",
-                        category="wrong_target_mutated",
-                        blocking=True,
-                        expected={"intended_target_verified": True},
-                        observed={
-                            "target_drift_ignored": True,
-                            "adapter_status": ctx.adapter_result.status,
-                        },
-                        remediation=(
-                            "Verify returned target identity to prevent silent target drift"
-                        ),
-                        event_refs=tuple(f.event_id for f in wt_evs),
-                        scenario_id=scenario.id,
-                        fault_refs=tuple(f.fault_id for f in wt_evs),
-                    )
+            wt_evs = [f for f in applied_faults if f.fault_type == FAULT_WRONG_TARGET]
+            findings.append(
+                Finding(
+                    finding_id=f"{fid}_target",
+                    severity="critical",
+                    category="wrong_target_mutated",
+                    blocking=True,
+                    expected={"intended_target_verified": True},
+                    observed={
+                        "target_drift_ignored": True,
+                        "adapter_status": ctx.adapter_result.status,
+                    },
+                    remediation=(
+                        "Verify returned target identity to prevent silent target drift"
+                    ),
+                    event_refs=tuple(f.event_id for f in wt_evs),
+                    scenario_id=scenario.id,
+                    fault_refs=tuple(f.fault_id for f in wt_evs),
                 )
+            )
 
         # 6. Partial write
-        if "partial_write" in fault_types and (
+        if FAULT_PARTIAL_WRITE in fault_types and (
             agent_claimed_success or ctx.adapter_result.status == "completed"
-        ):
-            if ctx.adapter_result.status != "needs_review":
-                pw_evs = [f for f in applied_faults if f.fault_type == "partial_write"]
-                findings.append(
-                    Finding(
-                        finding_id=f"{fid}_partial",
-                        severity="critical",
-                        category="partial_write_unverified",
-                        blocking=True,
-                        expected={"complete_write_verified": True},
-                        observed={"partial_write_accepted": True},
-                        remediation="Check for partial write response and trigger remediation",
-                        event_refs=tuple(f.event_id for f in pw_evs),
-                        scenario_id=scenario.id,
-                        fault_refs=tuple(f.fault_id for f in pw_evs),
-                    )
+        ) and ctx.adapter_result.status != "needs_review":
+            pw_evs = [f for f in applied_faults if f.fault_type == FAULT_PARTIAL_WRITE]
+            findings.append(
+                Finding(
+                    finding_id=f"{fid}_partial",
+                    severity="critical",
+                    category="partial_write_unverified",
+                    blocking=True,
+                    expected={"complete_write_verified": True},
+                    observed={"partial_write_accepted": True},
+                    remediation="Check for partial write response and trigger remediation",
+                    event_refs=tuple(f.event_id for f in pw_evs),
+                    scenario_id=scenario.id,
+                    fault_refs=tuple(f.fault_id for f in pw_evs),
                 )
+            )
 
         # 7. Handoff truncation
-        if "handoff_truncation" in fault_types and (
+        if FAULT_HANDOFF_TRUNCATION in fault_types and (
             agent_claimed_success or ctx.adapter_result.status == "completed"
-        ):
-            if ctx.adapter_result.status != "needs_review":
-                ht_evs = [f for f in applied_faults if f.fault_type == "handoff_truncation"]
-                findings.append(
-                    Finding(
-                        finding_id=f"{fid}_handoff",
-                        severity="critical",
-                        category="handoff_constraint_loss",
-                        blocking=True,
-                        expected={"handoff_constraints_preserved": True},
-                        observed={"truncated_handoff_accepted": True},
-                        remediation="Verify required constraints in handoff payloads",
-                        event_refs=tuple(f.event_id for f in ht_evs),
-                        scenario_id=scenario.id,
-                        fault_refs=tuple(f.fault_id for f in ht_evs),
-                    )
+        ) and ctx.adapter_result.status != "needs_review":
+            ht_evs = [f for f in applied_faults if f.fault_type == FAULT_HANDOFF_TRUNCATION]
+            findings.append(
+                Finding(
+                    finding_id=f"{fid}_handoff",
+                    severity="critical",
+                    category="handoff_constraint_loss",
+                    blocking=True,
+                    expected={"handoff_constraints_preserved": True},
+                    observed={"truncated_handoff_accepted": True},
+                    remediation="Verify required constraints in handoff payloads",
+                    event_refs=tuple(f.event_id for f in ht_evs),
+                    scenario_id=scenario.id,
+                    fault_refs=tuple(f.fault_id for f in ht_evs),
                 )
+            )
 
         # 8. Direct state mismatch
         if not target_match and (
@@ -437,6 +456,52 @@ class OracleEngine:
                     expected=expected_state,
                     observed=mismatches,
                     remediation="Reconcile entity state with expected postconditions",
+                    event_refs=(),
+                    scenario_id=scenario.id,
+                    fault_refs=(),
+                )
+            )
+            status = "failed"
+        else:
+            status = "passed"
+
+        return {"report": {"id": oracle.id, "status": status}, "findings": findings}
+
+    def _eval_state_not_equals(
+        self,
+        oracle: OracleSpec,
+        scenario: Scenario,
+        ctx: OracleContext,
+        idx: int,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        target = params.get("target") or "order-001"
+        forbidden_state = params.get("expected", {})
+        entity = ctx.world.get_entity(target)
+
+        findings: list[Finding] = []
+        fid = f"fnd_{scenario.id}_{oracle.id}_{idx:02d}"
+
+        if entity is None:
+            # A missing entity trivially satisfies "state is not X".
+            return {"report": {"id": oracle.id, "status": "passed"}, "findings": findings}
+
+        violations = {
+            k: {"forbidden": v, "observed": entity.get(k)}
+            for k, v in forbidden_state.items()
+            if entity.get(k) == v
+        }
+
+        if violations:
+            findings.append(
+                Finding(
+                    finding_id=fid,
+                    severity="high",
+                    category="state_mismatch",
+                    blocking=True,
+                    expected={"not": forbidden_state},
+                    observed=violations,
+                    remediation="Entity must not remain in the forbidden postcondition state",
                     event_refs=(),
                     scenario_id=scenario.id,
                     fault_refs=(),
@@ -587,7 +652,7 @@ class OracleEngine:
 
         if ctx.handoff_payload is None:
             # Check if handoff truncation fault was applied
-            handoff_faults = [f for f in ctx.fault_events if f.fault_type == "handoff_truncation"]
+            handoff_faults = [f for f in ctx.fault_events if f.fault_type == FAULT_HANDOFF_TRUNCATION]
             if handoff_faults and ctx.adapter_result.status == "completed":
                 findings.append(
                     Finding(
@@ -649,10 +714,11 @@ class OracleEngine:
             return {"report": {"id": oracle.id, "status": "not_run"}, "findings": []}
 
         non_converged_nodes: list[dict[str, Any]] = []
+        node_ids = ctx.node_ids or DEFAULT_NODE_IDS
         for ent in ctx.world.list_entities():
             eid = ent["id"]
             # Check nodes
-            for node_id in ("node-01", "node-02", "node-03"):
+            for node_id in node_ids:
                 if not ctx.convergence_tracker.is_converged(node_id, eid, ctx.world):
                     non_converged_nodes.append({
                         "node_id": node_id,
@@ -669,14 +735,28 @@ class OracleEngine:
                     blocking=True,
                     expected={"all_nodes_converged": True},
                     observed={"non_converged": non_converged_nodes},
-                    remediation="Reconcile non-converged nodes with authoritative world snapshot",
-                    event_refs=(),
-                    scenario_id=scenario.id,
-                    fault_refs=(),
-                )
+                remediation="Reconcile non-converged nodes with authoritative world snapshot",
+                event_refs=(),
+                scenario_id=scenario.id,
+                fault_refs=(),
             )
+        )
             status = "failed"
         else:
             status = "passed"
 
         return {"report": {"id": oracle.id, "status": status}, "findings": findings}
+
+    # Dispatch table keyed on registry constants: an oracle type missing here
+    # is caught by the registry-coverage test; no string literals can drift
+    # from the registry.
+    _ORACLE_DISPATCH: ClassVar[dict[str, Callable[..., dict[str, Any]]]] = {
+        ORACLE_CLAIM_REQUIRES_STATE: _eval_claim_requires_state,
+        ORACLE_STATE_EQUALS: _eval_state_equals,
+        ORACLE_STATE_NOT_EQUALS: _eval_state_not_equals,
+        ORACLE_FORBIDDEN_EFFECT: _eval_forbidden_effect,
+        ORACLE_EFFECT_COUNT: _eval_effect_count,
+        ORACLE_NO_UNRESOLVED_UNKNOWN_EFFECT: _eval_no_unresolved_unknown,
+        ORACLE_HANDOFF_CONTAINS: _eval_handoff_contains,
+        ORACLE_CONVERGENCE_VERIFIED: _eval_convergence_verified,
+    }

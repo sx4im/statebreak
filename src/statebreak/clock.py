@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from statebreak.errors import ConfigurationError, UsageError
@@ -24,10 +24,10 @@ def parse_iso_utc(timestamp: str) -> datetime:
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
             # Assume UTC if naive
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         else:
             # Convert to UTC
-            dt = dt.astimezone(timezone.utc)
+            dt = dt.astimezone(UTC)
         return dt
     except Exception as exc:
         raise ConfigurationError(
@@ -37,7 +37,7 @@ def parse_iso_utc(timestamp: str) -> datetime:
 
 def format_iso_utc(dt: datetime) -> str:
     """Format a timezone-aware UTC datetime as canonical ISO 8601 UTC string ending in 'Z'."""
-    utc_dt = dt.astimezone(timezone.utc)
+    utc_dt = dt.astimezone(UTC)
     s = utc_dt.isoformat()
     if s.endswith("+00:00"):
         return s[:-6] + "Z"
@@ -53,9 +53,9 @@ class VirtualClock:
             self._step_seconds = int(start.step_seconds)
         elif isinstance(start, datetime):
             if start.tzinfo is None:
-                self._start_dt = start.replace(tzinfo=timezone.utc)
+                self._start_dt = start.replace(tzinfo=UTC)
             else:
-                self._start_dt = start.astimezone(timezone.utc)
+                self._start_dt = start.astimezone(UTC)
             self._step_seconds = int(step_seconds)
         elif isinstance(start, str):
             self._start_dt = parse_iso_utc(start)
@@ -93,7 +93,7 @@ class VirtualClock:
         """Return the current virtual time formatted as canonical ISO 8601 UTC string."""
         return format_iso_utc(self._current_dt)
 
-    def advance(self, duration: int | float | timedelta) -> str:
+    def advance(self, duration: float | timedelta) -> str:
         """Advance virtual time by non-negative duration in seconds or timedelta."""
         if isinstance(duration, timedelta):
             delta = duration
@@ -130,9 +130,9 @@ class VirtualClock:
             expiry_dt = parse_iso_utc(expiry)
         elif isinstance(expiry, datetime):
             if expiry.tzinfo is None:
-                expiry_dt = expiry.replace(tzinfo=timezone.utc)
+                expiry_dt = expiry.replace(tzinfo=UTC)
             else:
-                expiry_dt = expiry.astimezone(timezone.utc)
+                expiry_dt = expiry.astimezone(UTC)
         else:
             raise UsageError(f"unsupported expiry type: {type(expiry)}")
 
@@ -144,9 +144,9 @@ class VirtualClock:
             target_dt = parse_iso_utc(target)
         elif isinstance(target, datetime):
             if target.tzinfo is None:
-                target_dt = target.replace(tzinfo=timezone.utc)
+                target_dt = target.replace(tzinfo=UTC)
             else:
-                target_dt = target.astimezone(timezone.utc)
+                target_dt = target.astimezone(UTC)
         else:
             raise UsageError(f"unsupported target type: {type(target)}")
 

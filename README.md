@@ -2,7 +2,7 @@
 
 > Deterministic failure laboratory for AI agents: inject stale state, expired approvals, timeouts, duplicate retries, wrong targets, and broken handoffs—then verify authoritative outcomes locally.
 
-[![CI](https://github.com/statebreak/statebreak/actions/workflows/ci.yml/badge.svg)](https://github.com/statebreak/statebreak/actions)
+<!-- CI badge: re-add once the repository is published at github.com/statebreak/statebreak -->
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -68,11 +68,11 @@ StateBreak isolates these failure modes into versioned, reproducible test fixtur
 
 | Scenario | Injected Failure | Naive Agent Behavior | Guarded Agent Behavior |
 |---|---|---|---|
-| [`approval-expiry`](scenarios/approval-expiry.yml) | Approval expires before commit | Executes write anyway (`FAIL`) | Detects expiry, requests re-approval (`PASS`) |
+| [`approval-expiry`](scenarios/approval-expiry.yml) | Approval expires before commit | Executes write anyway (`FAIL`) | Detects expiry, requests re-approval (`NEEDS_REVIEW` = safe recovery) |
 | [`timeout-after-commit`](scenarios/timeout-after-commit.yml) | Timeout after write commits | Assumes failure or blind success (`FAIL`) | Re-reads state to reconcile (`PASS`) |
 | [`duplicate-retry`](scenarios/duplicate-retry.yml) | Ambiguous network error | Retries with new ID, double charges (`FAIL`) | Uses stable idempotency keys (`PASS`) |
-| [`wrong-target`](scenarios/wrong-target.yml) | Target ID drifted | Modifies wrong entity (`FAIL`) | Revalidates version lock and target (`PASS`) |
-| [`partial-write`](scenarios/partial-write.yml) | First write succeeds, second fails | Reports complete success (`FAIL`) | Flags partial state for review (`PASS`) |
+| [`wrong-target`](scenarios/wrong-target.yml) | Target ID drifted | Modifies wrong entity (`FAIL`) | Revalidates version lock and target (`NEEDS_REVIEW` = safe recovery) |
+| [`partial-write`](scenarios/partial-write.yml) | First write succeeds, second fails | Reports complete success (`FAIL`) | Flags partial state for review (`NEEDS_REVIEW` = safe recovery) |
 | [`handoff-loss`](scenarios/handoff-loss.yml) | Handoff drops constraints | Executes without safety rules (`FAIL`) | Pauses and requests missing context (`PASS`) |
 
 ---
@@ -87,6 +87,7 @@ from statebreak.runner import ScenarioRunner
 
 class MyAgentAdapter(AgentAdapter):
     name = "my-agent"
+    version = "0.1.0"
 
     def run(self, context: AdapterContext) -> AdapterResult:
         # Query state through the gateway
@@ -98,19 +99,29 @@ class MyAgentAdapter(AgentAdapter):
             target="example-001",
             payload={"status": "completed"},
             operation_id="op_stable_123",
-            expected_version=obs.version,
+            expected_version=obs.state_version,
         )
 
         if outcome.status == "committed":
             context.add_claim("task_committed", True)
-            return AdapterResult(claims=context.claims, status="completed")
+            return AdapterResult(
+                claims=context.claims,
+                status="completed",
+                adapter_name=self.name,
+                adapter_version="0.1.0",
+            )
 
-        return AdapterResult(claims=context.claims, status="needs_review")
+        return AdapterResult(
+            claims=context.claims,
+            status="needs_review",
+            adapter_name=self.name,
+            adapter_version="0.1.0",
+        )
 
 # Run directly in pytest
 report = ScenarioRunner().run_scenario(
     "scenarios/approval-expiry.yml",
-    adapter_instance=MyAgentAdapter(),
+    adapter=MyAgentAdapter(),
 )
 assert report.verdict in ("pass", "needs_review")
 assert len(report.findings) == 0

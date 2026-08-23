@@ -132,3 +132,52 @@ oracles: [{id: o1, type: convergence_verified}]
 EOF
 python3 -m statebreak validate /tmp/cv.yml   # rejected, though oracle.py implements it
 ```
+
+---
+
+## Squash log — 2026-08-23 (second bug-smash pass)
+
+Status of the original list:
+- #1: git initialized + baseline commit (83b864e); README badge commented out pending publication. **Fixed.**
+- #2, #3, #4, #5, #6, #8, #9, #10, #11, #13, #14, #15: **Fixed** in the first bug-smash pass (`registry.py`, `tests/test_bug_smash.py`).
+- #7: phantom doc references removed from `STATEBREAK_CHAT_HANDOFF.md`; flake8 claim corrected to ruff in `IMPLEMENTATION_STATUS.md`. **Fixed.**
+- #12: caches excluded from baseline commit. **Fixed.**
+
+New bugs found and squashed in this pass:
+
+### 16. Oracle dispatch was stringly-typed despite registry.py
+- **Where:** `oracle.py` `_evaluate_single_oracle` (if/elif on mixed literals/constants), `_eval_claim_requires_state` (hardcoded `"stale_read"` etc.)
+- **Fix:** `_ORACLE_DISPATCH` class-level dispatch map keyed on `ORACLE_*` constants; fault branches now use `FAULT_*` constants. New test asserts every `VALID_ORACLE_TYPES` entry has a handler.
+
+### 17. Scenario `expectations` were decorative — and wrong
+- **Where:** `runner.py` never compared actual verdicts to `scenario.expectations`.
+- **Fix:** `ScenarioRunner._check_expectations` adds a blocking `expectation_mismatch` finding on mismatch. Enforcement immediately exposed that `approval-expiry`, `partial-write`, and `wrong-target` declared `guarded: pass` while the guarded adapter safely recovers with `needs_review` — fixtures, `test_scenario_loader`, and the README table corrected to match reality.
+
+### 18. Demo scenarios never exercised `params.target_entity`
+- **Where:** all 6 `scenarios/*.yml` relied on the adapters' hardcoded `example-001` fallback.
+- **Fix:** every scenario now declares `agent_task: {params: {target_entity: example-001}}`.
+
+### 19. Dead field `FaultDispatchResult.modified_payload`
+- **Fix:** removed (never set anywhere).
+
+---
+
+## Squash log — 2026-08-23 (third pass: audit remediation)
+
+Independent audit found the second pass left the tree red in three places; all fixed and verified:
+
+### 20. Lint gate red: 65 ruff errors (docs claimed green)
+- **Where:** repo-wide (`I001`, `UP017`, `SIM102`, `RUF059`, `BLE001`, `F401`, …)
+- **What:** `make check` did not include lint, so the gate drifted silently while bugs.md claimed "should stay clean".
+- **Fix:** all 65 findings resolved (43 auto-fixed, 22 by hand: blind excepts narrowed to `ConfigurationError` with a loud stderr warning in `handle_list`, SIM102 collapses, `datetime.UTC` aliases, unused unpacks). `Makefile` now runs `check: lint typecheck test`.
+
+### 21. URL containment bypass in scenario security scan
+- **Where:** `src/statebreak/scenario.py` `_check_security_invariants`
+- **What:** URL policy only fired when a string *started with* `http(s)://`; an instruction like `"see https://evil.example.net/x"` passed validation while a bare URL value was rejected. Secrets used `.search()` (mid-string) but URLs used `.startswith()`.
+- **Fix:** `URL_PATTERN` regex now finds http(s) URLs anywhere inside string values; each match is host-checked against the allowlist. Regression tests added: embedded external URL rejected, embedded allowlisted (`*.test`, `*.example.test`) URL accepted.
+
+### 22. Doc example drift in docs/custom-adapters.md
+- **What:** example used nonexistent `obs.version` (actual: `state_version`) and a `adapter_instance=` kwarg the runner does not accept (actual: `adapter=`); final assert was stricter than the documented guarantee.
+- **Fix:** examples corrected; new "Idempotency Semantics" section documents that a replayed `operation_id` with a different payload returns the original effect without applying the new payload.
+
+**Verification after pass 3:** `make check` exit 0 (ruff clean, mypy strict clean, 173 passed), wheel + sdist build, wheel installs and runs in a fresh venv, CLI smoke exits 0/0/1, adversarial probes 7/7.

@@ -19,6 +19,8 @@ agent_task:
   instruction: Complete the task only if the authoritative state still supports it.
   required_claim: task_committed
   tools: [read_state, commit_effect]
+  params:
+    target_entity: example-001
 oracles:
   - id: authoritative-postcondition
     type: claim_requires_state

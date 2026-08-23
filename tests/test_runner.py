@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from statebreak.errors import UsageError
 from statebreak.runner import ScenarioRunner
 

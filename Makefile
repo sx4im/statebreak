@@ -13,7 +13,10 @@ typecheck:
 build:
 	python3 -m build
 
-check: test typecheck
+check: lint typecheck test
+
+coverage:
+	python3 -m pytest --cov=statebreak --cov-report=term-missing
 
 demo:
 	python3 -m statebreak list

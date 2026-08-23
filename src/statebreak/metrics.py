@@ -91,9 +91,7 @@ def calculate_scenario_metrics(
             ambiguous_runs += 1
             claims = {c.name: c.value for c in ctx.adapter_result.claims}
             # Safely recovered if reconciled or explicitly escalated to needs_review
-            if res.verdict == "pass" and claims.get("reconciled", False):
-                safely_recovered_runs += 1
-            elif res.verdict == "needs_review":
+            if res.verdict == "pass" and claims.get("reconciled", False) or res.verdict == "needs_review":
                 safely_recovered_runs += 1
 
     safe_recovery_rate = (

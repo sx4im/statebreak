@@ -87,7 +87,7 @@ class LocalWorld:
             if key == "entities":
                 continue
             if isinstance(val, list):
-                entity_type = key[:-1] if key.endswith("s") else key
+                entity_type = key.removesuffix("s")
                 for item in val:
                     if isinstance(item, dict) and "id" in item:
                         item_copy = dict(item)
@@ -195,17 +195,16 @@ class LocalWorld:
             )
 
         # Check virtual clock expiry if provided and expires_at is declared
-        if clock is not None and expires_at:
-            if clock.is_expired(str(expires_at)):
-                return ApprovalObservation(
-                    approval_id=approval_id,
-                    status="expired",
-                    subject=subject,
-                    scope=scope,
-                    amount=amount,
-                    expires_at=str(expires_at),
-                    is_valid=False,
-                )
+        if clock is not None and expires_at and clock.is_expired(str(expires_at)):
+            return ApprovalObservation(
+                approval_id=approval_id,
+                status="expired",
+                subject=subject,
+                scope=scope,
+                amount=amount,
+                expires_at=str(expires_at),
+                is_valid=False,
+            )
 
         is_valid = declared_status == "approved"
         return ApprovalObservation(
@@ -222,6 +221,42 @@ class LocalWorld:
         self._effect_counter += 1
         return f"eff_{self._effect_counter:04d}"
 
+    def _reject_mutation(
+        self,
+        entity_id: str,
+        updates: dict[str, Any],
+        error: str,
+        before_version: str,
+        after_version: str,
+        kind: str,
+        operation_id: str | None,
+        provider_id: str | None,
+        event_refs: tuple[str, ...] = (),
+    ) -> MutationResult:
+        """Record a rejected effect and build its rejection result (shared path)."""
+        eff_id = self._next_effect_id()
+        op_id = operation_id or f"op_{eff_id}"
+        eff = EffectRecord(
+            effect_id=eff_id,
+            operation_id=op_id,
+            kind=kind,
+            target=entity_id,
+            status="rejected",
+            payload_hash=compute_sha256(canonical_json(updates)),
+            provider_id=provider_id,
+            event_refs=event_refs,
+        )
+        self._record_effect(eff)
+        return MutationResult(
+            success=False,
+            status="rejected",
+            entity_id=entity_id,
+            before_version=before_version,
+            after_version=after_version,
+            effect=eff,
+            error=error,
+        )
+
     def update_entity(
         self,
         entity_id: str,
@@ -234,27 +269,16 @@ class LocalWorld:
     ) -> MutationResult:
         """Update an entity with expected-version checking and effect recording."""
         if entity_id not in self._entities:
-            eff_id = self._next_effect_id()
-            op_id = operation_id or f"op_{eff_id}"
-            eff = EffectRecord(
-                effect_id=eff_id,
-                operation_id=op_id,
-                kind=kind,
-                target=entity_id,
-                status="rejected",
-                payload_hash=compute_sha256(canonical_json(updates)),
-                provider_id=provider_id,
-                event_refs=event_refs,
-            )
-            self._record_effect(eff)
-            return MutationResult(
-                success=False,
-                status="rejected",
+            return self._reject_mutation(
                 entity_id=entity_id,
+                updates=updates,
+                error=f"target entity '{entity_id}' does not exist in world",
                 before_version="v0",
                 after_version="v0",
-                effect=eff,
-                error=f"target entity '{entity_id}' does not exist in world",
+                kind=kind,
+                operation_id=operation_id,
+                provider_id=provider_id,
+                event_refs=event_refs,
             )
 
         # Check payload size limit
@@ -282,30 +306,19 @@ class LocalWorld:
 
         # Expected version conflict check
         if expected_version is not None and expected_version != cur_ver_str:
-            eff_id = self._next_effect_id()
-            op_id = operation_id or f"op_{eff_id}"
-            eff = EffectRecord(
-                effect_id=eff_id,
-                operation_id=op_id,
-                kind=kind,
-                target=entity_id,
-                status="rejected",
-                payload_hash=compute_sha256(payload_json),
-                provider_id=provider_id,
-                event_refs=event_refs,
-            )
-            self._record_effect(eff)
-            return MutationResult(
-                success=False,
-                status="rejected",
+            return self._reject_mutation(
                 entity_id=entity_id,
-                before_version=cur_ver_str,
-                after_version=cur_ver_str,
-                effect=eff,
+                updates=updates,
                 error=(
                     f"version conflict: expected '{expected_version}', "
                     f"authoritative is '{cur_ver_str}'"
                 ),
+                before_version=cur_ver_str,
+                after_version=cur_ver_str,
+                kind=kind,
+                operation_id=operation_id,
+                provider_id=provider_id,
+                event_refs=event_refs,
             )
 
         # Apply mutation
@@ -359,57 +372,35 @@ class LocalWorld:
     ) -> MutationResult:
         """Apply a partial write, incrementing entity version and recording partial effect."""
         if entity_id not in self._entities:
-            eff_id = self._next_effect_id()
-            op_id = operation_id or f"op_{eff_id}"
-            eff = EffectRecord(
-                effect_id=eff_id,
-                operation_id=op_id,
-                kind=kind,
-                target=entity_id,
-                status="rejected",
-                payload_hash=compute_sha256(canonical_json(updates)),
-                provider_id=provider_id,
-                event_refs=event_refs,
-            )
-            self._record_effect(eff)
-            return MutationResult(
-                success=False,
-                status="rejected",
+            return self._reject_mutation(
                 entity_id=entity_id,
+                updates=updates,
+                error=f"target entity '{entity_id}' does not exist in world",
                 before_version="v0",
                 after_version="v0",
-                effect=eff,
-                error=f"target entity '{entity_id}' does not exist in world",
+                kind=kind,
+                operation_id=operation_id,
+                provider_id=provider_id,
+                event_refs=event_refs,
             )
 
         cur_ver_num = self._entity_versions[entity_id]
         cur_ver_str = f"v{cur_ver_num}"
 
         if expected_version is not None and expected_version != cur_ver_str:
-            eff_id = self._next_effect_id()
-            op_id = operation_id or f"op_{eff_id}"
-            eff = EffectRecord(
-                effect_id=eff_id,
-                operation_id=op_id,
-                kind=kind,
-                target=entity_id,
-                status="rejected",
-                payload_hash=compute_sha256(canonical_json(updates)),
-                provider_id=provider_id,
-                event_refs=event_refs,
-            )
-            self._record_effect(eff)
-            return MutationResult(
-                success=False,
-                status="rejected",
+            return self._reject_mutation(
                 entity_id=entity_id,
-                before_version=cur_ver_str,
-                after_version=cur_ver_str,
-                effect=eff,
+                updates=updates,
                 error=(
                     f"version conflict: expected '{expected_version}', "
                     f"authoritative is '{cur_ver_str}'"
                 ),
+                before_version=cur_ver_str,
+                after_version=cur_ver_str,
+                kind=kind,
+                operation_id=operation_id,
+                provider_id=provider_id,
+                event_refs=event_refs,
             )
 
         # Apply only declared applied_fields

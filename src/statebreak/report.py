@@ -124,12 +124,15 @@ def render_markdown(report: RunReport) -> str:
 
     # Diagnostic section
     if report.verdict == "fail":
+        diagnostic = (
+            "Authoritative state evaluation detected that declared scenario invariants were "
+            "not satisfied. The agent adapter claimed completion or executed unverified "
+            "actions in the presence of injected faults. Review findings table for remediation."
+        )
         lines.extend([
             "## Diagnostic: Why this failed",
             "",
-            "Authoritative state evaluation detected that declared scenario invariants were not "
-            "satisfied. The agent adapter claimed completion or executed unverified actions in "
-            "the presence of injected faults. Review findings table for remediation.",
+            diagnostic,
             "",
         ])
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -26,7 +26,7 @@ def test_clock_initialization_from_clock_spec() -> None:
 
 
 def test_clock_initialization_from_datetime() -> None:
-    dt = datetime(2026, 3, 10, 8, 30, 0, tzinfo=timezone.utc)
+    dt = datetime(2026, 3, 10, 8, 30, 0, tzinfo=UTC)
     clock = VirtualClock(dt, step_seconds=15)
     assert clock.now_iso() == "2026-03-10T08:30:00Z"
 
@@ -145,5 +145,5 @@ def test_parse_and_format_iso_utc() -> None:
     assert dt.year == 2026
     assert dt.month == 12
     assert dt.day == 31
-    assert dt.tzinfo == timezone.utc
+    assert dt.tzinfo == UTC
     assert format_iso_utc(dt) == "2026-12-31T23:59:59Z"

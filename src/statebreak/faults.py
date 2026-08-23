@@ -7,29 +7,11 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from statebreak.canonical import canonical_json, compute_sha256
-from statebreak.clock import VirtualClock
+from statebreak.clock import VirtualClock, parse_iso_utc
 from statebreak.errors import ConfigurationError
 from statebreak.models import FaultSpec
+from statebreak.registry import VALID_FAULT_TYPES, VALID_LIFECYCLE_POINTS
 from statebreak.world import LocalWorld, MutationResult
-
-VALID_FAULT_TYPES = {
-    "stale_read",
-    "approval_expired",
-    "timeout_after_commit",
-    "duplicate_retry",
-    "wrong_target",
-    "partial_write",
-    "handoff_truncation",
-}
-
-VALID_LIFECYCLE_POINTS = {
-    "before_read",
-    "after_read",
-    "before_commit",
-    "after_commit_before_response",
-    "before_retry",
-    "handoff_emit",
-}
 
 
 @dataclass(frozen=True)
@@ -65,7 +47,6 @@ class FaultDispatchResult:
     event: FaultEvent | None = None
     modified_observation: dict[str, Any] | None = None
     modified_target: str | None = None
-    modified_payload: dict[str, Any] | None = None
     modified_result: MutationResult | None = None
     modified_handoff: dict[str, Any] | None = None
 
@@ -78,6 +59,11 @@ class FaultScheduler:
         faults: tuple[FaultSpec, ...] | list[FaultSpec] = (),
         seed: int = 42,
     ) -> None:
+        # ``seed`` is provenance-only today: no scheduler behavior consumes
+        # randomness. Injection is deterministic-by-construction; the seed is
+        # hashed into fault events and reported so runs remain attributable
+        # and replayable. Reserved for future randomized-but-replayable
+        # fault ordering.
         self._seed = int(seed)
         self._faults: list[FaultSpec] = []
         self._fault_map: dict[str, FaultSpec] = {}
@@ -198,15 +184,18 @@ class FaultScheduler:
         """Dispatch before_read lifecycle point."""
         for f in self._faults:
             if f.at == "before_read" and self._should_trigger(f, target):
-                # Currently no standard before_read mutator in MVP; records event
+                # No standard before_read mutator exists yet: record the event
+                # honestly as skipped so fault timelines don't claim mutations
+                # that never happened. Repeat allowance is NOT consumed.
                 evt = self._record_event(
                     fault=f,
                     clock=clock,
-                    status="applied",
-                    reason=f"applied {f.type} before read of {target}",
+                    status="skipped",
+                    reason=(f"{f.type} declared at before_read has no implemented "
+                            f"mutator; no effect applied"),
                     target=target,
                 )
-                return FaultDispatchResult(applied=True, fault_id=f.id, event=evt)
+                return FaultDispatchResult(applied=False, fault_id=f.id, event=evt)
         return FaultDispatchResult(applied=False)
 
     def after_read(
@@ -218,42 +207,45 @@ class FaultScheduler:
     ) -> FaultDispatchResult:
         """Dispatch after_read lifecycle point (e.g. stale_read injection)."""
         for f in self._faults:
-            if f.at == "after_read" and self._should_trigger(f, target):
-                if f.type == "stale_read":
-                    before_json = canonical_json(observation)
-                    before_hash = compute_sha256(before_json)
+            if (
+                f.at == "after_read"
+                and f.type == "stale_read"
+                and self._should_trigger(f, target)
+            ):
+                before_json = canonical_json(observation)
+                before_hash = compute_sha256(before_json)
 
-                    stale_obs = copy.deepcopy(observation)
-                    # Override with stale attributes from params or degrade version to v1
-                    stale_ver = f.params.get("stale_version", "v1")
-                    stale_obs["version"] = stale_ver
-                    if "stale_status" in f.params:
-                        stale_obs["status"] = f.params["stale_status"]
-                    elif "status" in stale_obs and stale_obs["status"] == "completed":
-                        stale_obs["status"] = "pending"
+                stale_obs = copy.deepcopy(observation)
+                # Override with stale attributes from params or degrade version to v1
+                stale_ver = f.params.get("stale_version", "v1")
+                stale_obs["version"] = stale_ver
+                if "stale_status" in f.params:
+                    stale_obs["status"] = f.params["stale_status"]
+                elif "status" in stale_obs and stale_obs["status"] == "completed":
+                    stale_obs["status"] = "pending"
 
-                    after_json = canonical_json(stale_obs)
-                    after_hash = compute_sha256(after_json)
+                after_json = canonical_json(stale_obs)
+                after_hash = compute_sha256(after_json)
 
-                    evt = self._record_event(
-                        fault=f,
-                        clock=clock,
-                        status="applied",
-                        reason=f"injected stale read observation with version '{stale_ver}'",
-                        target=target,
-                        before_hash=before_hash,
-                        after_hash=after_hash,
-                        details={
-                            "stale_version": stale_ver,
-                            "original_version": observation.get("version"),
-                        },
-                    )
-                    return FaultDispatchResult(
-                        applied=True,
-                        fault_id=f.id,
-                        event=evt,
-                        modified_observation=stale_obs,
-                    )
+                evt = self._record_event(
+                    fault=f,
+                    clock=clock,
+                    status="applied",
+                    reason=f"injected stale read observation with version '{stale_ver}'",
+                    target=target,
+                    before_hash=before_hash,
+                    after_hash=after_hash,
+                    details={
+                        "stale_version": stale_ver,
+                        "original_version": observation.get("version"),
+                    },
+                )
+                return FaultDispatchResult(
+                    applied=True,
+                    fault_id=f.id,
+                    event=evt,
+                    modified_observation=stale_obs,
+                )
         return FaultDispatchResult(applied=False)
 
     def before_commit(
@@ -273,12 +265,21 @@ class FaultScheduler:
                     appr_ent = world.get_entity(appr_target)
                     before_hash = compute_sha256(canonical_json(appr_ent)) if appr_ent else None
 
-                    # If the approval has expires_at, advance clock past it or set status to expired
                     if appr_ent and "expires_at" in appr_ent:
-                        # Advance clock to 1 second past expires_at
-                        clock.advance(clock.step_seconds)
+                        # Advance the clock deterministically PAST the declared
+                        # expiry (+1 second) so the approval is genuinely expired
+                        # regardless of scenario timing or step size.
+                        try:
+                            expiry_dt = parse_iso_utc(str(appr_ent["expires_at"]))
+                            delta_seconds = (expiry_dt - clock.now()).total_seconds() + 1.0
+                            if delta_seconds > 0:
+                                clock.advance(delta_seconds)
+                        except ConfigurationError:
+                            # Unparseable expiry timestamp: fall back to
+                            # forcing the status to expired.
+                            world.update_entity(appr_target, {"status": "expired"})
                     elif appr_ent:
-                        # Update status to expired
+                        # No declared expiry: simulate expiry by status update
                         world.update_entity(appr_target, {"status": "expired"})
 
                     after_ent = world.get_entity(appr_target)
@@ -400,17 +401,20 @@ class FaultScheduler:
     ) -> FaultDispatchResult:
         """Dispatch before_retry lifecycle point (e.g. duplicate_retry tracking)."""
         for f in self._faults:
-            if f.at == "before_retry" and self._should_trigger(f, target):
-                if f.type == "duplicate_retry":
-                    evt = self._record_event(
-                        fault=f,
-                        clock=clock,
-                        status="applied",
-                        reason=f"injected duplicate retry check for operation '{operation_id}'",
-                        target=target,
-                        operation_id=operation_id,
-                    )
-                    return FaultDispatchResult(applied=True, fault_id=f.id, event=evt)
+            if (
+                f.at == "before_retry"
+                and f.type == "duplicate_retry"
+                and self._should_trigger(f, target)
+            ):
+                evt = self._record_event(
+                    fault=f,
+                    clock=clock,
+                    status="applied",
+                    reason=f"injected duplicate retry check for operation '{operation_id}'",
+                    target=target,
+                    operation_id=operation_id,
+                )
+                return FaultDispatchResult(applied=True, fault_id=f.id, event=evt)
         return FaultDispatchResult(applied=False)
 
     def handoff_emit(
@@ -420,45 +424,48 @@ class FaultScheduler:
     ) -> FaultDispatchResult:
         """Dispatch handoff_emit lifecycle point (e.g. handoff_truncation)."""
         for f in self._faults:
-            if f.at == "handoff_emit" and self._should_trigger(f):
-                if f.type == "handoff_truncation":
-                    before_json = canonical_json(payload)
-                    before_hash = compute_sha256(before_json)
+            if (
+                f.at == "handoff_emit"
+                and f.type == "handoff_truncation"
+                and self._should_trigger(f)
+            ):
+                before_json = canonical_json(payload)
+                before_hash = compute_sha256(before_json)
 
-                    truncated_payload = copy.deepcopy(payload)
-                    truncated_keys = f.params.get(
-                        "truncated_fields",
-                        ["constraints", "context", "history"],
-                    )
-                    omitted: list[str] = []
-                    for k in truncated_keys:
-                        if k in truncated_payload:
-                            del truncated_payload[k]
-                            omitted.append(k)
+                truncated_payload = copy.deepcopy(payload)
+                truncated_keys = f.params.get(
+                    "truncated_fields",
+                    ["constraints", "context", "history"],
+                )
+                omitted: list[str] = []
+                for k in truncated_keys:
+                    if k in truncated_payload:
+                        del truncated_payload[k]
+                        omitted.append(k)
 
-                    # If none of the default keys matched, drop the last key in payload if any
-                    if not omitted and truncated_payload:
-                        last_key = list(truncated_payload.keys())[-1]
-                        del truncated_payload[last_key]
-                        omitted.append(last_key)
+                # If none of the default keys matched, drop the last key in payload if any
+                if not omitted and truncated_payload:
+                    last_key = list(truncated_payload.keys())[-1]
+                    del truncated_payload[last_key]
+                    omitted.append(last_key)
 
-                    after_json = canonical_json(truncated_payload)
-                    after_hash = compute_sha256(after_json)
+                after_json = canonical_json(truncated_payload)
+                after_hash = compute_sha256(after_json)
 
-                    evt = self._record_event(
-                        fault=f,
-                        clock=clock,
-                        status="applied",
-                        reason=f"truncated handoff fields: {omitted}",
-                        before_hash=before_hash,
-                        after_hash=after_hash,
-                        details={"omitted_fields": omitted},
-                    )
-                    return FaultDispatchResult(
-                        applied=True,
-                        fault_id=f.id,
-                        event=evt,
-                        modified_handoff=truncated_payload,
-                    )
+                evt = self._record_event(
+                    fault=f,
+                    clock=clock,
+                    status="applied",
+                    reason=f"truncated handoff fields: {omitted}",
+                    before_hash=before_hash,
+                    after_hash=after_hash,
+                    details={"omitted_fields": omitted},
+                )
+                return FaultDispatchResult(
+                    applied=True,
+                    fault_id=f.id,
+                    event=evt,
+                    modified_handoff=truncated_payload,
+                )
 
         return FaultDispatchResult(applied=False)

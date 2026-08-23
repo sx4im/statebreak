@@ -22,36 +22,15 @@ from statebreak.models import (
     OracleSpec,
     Scenario,
 )
+from statebreak.registry import (
+    VALID_FAULT_TYPES,
+    VALID_LIFECYCLE_POINTS,
+    VALID_ORACLE_TYPES,
+)
 
-# Supported lifecycle points and types
-VALID_FAULT_LIFECYCLE_POINTS = {
-    "before_read",
-    "after_read",
-    "before_commit",
-    "after_commit_before_response",
-    "before_retry",
-    "handoff_emit",
-}
-
-VALID_FAULT_TYPES = {
-    "stale_read",
-    "approval_expired",
-    "timeout_after_commit",
-    "duplicate_retry",
-    "wrong_target",
-    "partial_write",
-    "handoff_truncation",
-}
-
-VALID_ORACLE_TYPES = {
-    "state_equals",
-    "state_not_equals",
-    "forbidden_effect",
-    "effect_count",
-    "claim_requires_state",
-    "no_unresolved_unknown_effect",
-    "handoff_contains",
-}
+# Backwards-compatible aliases: lifecycle points were previously named
+# VALID_FAULT_LIFECYCLE_POINTS in this module.
+VALID_FAULT_LIFECYCLE_POINTS = VALID_LIFECYCLE_POINTS
 
 # Suspicious secret detection patterns
 SECRET_PATTERNS = [
@@ -60,6 +39,11 @@ SECRET_PATTERNS = [
     re.compile(r"sk-[a-zA-Z0-9]{20,}"),  # OpenAI/API Secret Key
     re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----"),  # Private keys
 ]
+
+# URL detection matches http(s) URLs ANYWHERE inside a string value, not only
+# when the whole string starts with one — an instruction like
+# "see https://evil.example.net/x" must be rejected just like a bare URL.
+URL_PATTERN = re.compile(r"https?://[^\s\"'><)]+", re.IGNORECASE)
 
 ALLOWED_HOST_SUFFIXES = (
     ".example.test",
@@ -117,25 +101,24 @@ def _check_security_invariants(data: Any, path: str = "scenario") -> None:
                     f"security check failed at {path}: value matches suspicious credential pattern"
                 )
 
-        # 2. Check for non-test URLs
-        if data.startswith("http://") or data.startswith("https://"):
+        # 2. Check for non-test URLs (anywhere in the string, not only as prefix)
+        for match in URL_PATTERN.finditer(data):
             try:
-                parsed = urlparse(data)
+                parsed = urlparse(match.group(0))
                 hostname = (parsed.hostname or "").lower()
-                if not any(
-                    hostname == allowed.lstrip(".") or hostname.endswith(allowed)
-                    for allowed in ALLOWED_HOST_SUFFIXES
-                ):
-                    raise ConfigurationError(
-                        f"security check failed at {path}: external non-test URL '{data}' "
-                        f"is not permitted (allowed domains: *.example.test, *.test, localhost)"
-                    )
-            except Exception as exc:
-                if isinstance(exc, ConfigurationError):
-                    raise
+            except ValueError as exc:
                 raise ConfigurationError(
-                    f"security check failed at {path}: invalid URL '{data}'"
+                    f"security check failed at {path}: invalid URL '{match.group(0)}'"
                 ) from exc
+            if not any(
+                hostname == allowed.lstrip(".") or hostname.endswith(allowed)
+                for allowed in ALLOWED_HOST_SUFFIXES
+            ):
+                raise ConfigurationError(
+                    f"security check failed at {path}: external non-test URL "
+                    f"'{match.group(0)}' is not permitted "
+                    f"(allowed domains: *.example.test, *.test, localhost)"
+                )
 
     elif isinstance(data, dict):
         for k, v in data.items():
@@ -159,8 +142,8 @@ def _check_semantic_invariants(data: dict[str, Any]) -> None:
     if isinstance(clock, dict) and "start" in clock:
         start_str = clock["start"]
         try:
-            # Validate ISO 8601 parseable
-            datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            # Validate ISO 8601 parseable ("Z" suffix is supported natively on 3.11+)
+            datetime.fromisoformat(start_str)
         except Exception as exc:
             raise ConfigurationError(
                 f"invalid clock.start timestamp '{start_str}': must be valid ISO 8601 string"

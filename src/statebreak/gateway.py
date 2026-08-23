@@ -7,6 +7,7 @@ from typing import Any
 
 from statebreak.adapter import ToolObservation, ToolOutcome
 from statebreak.clock import VirtualClock
+from statebreak.convergence import ConvergenceTracker
 from statebreak.errors import UsageError
 from statebreak.faults import FaultScheduler
 from statebreak.world import ApprovalObservation, LocalWorld, MutationResult
@@ -21,11 +22,14 @@ class ToolGateway:
         fault_scheduler: FaultScheduler,
         clock: VirtualClock,
         allowed_tools: tuple[str, ...] | list[str] | None = None,
+        convergence_tracker: ConvergenceTracker | None = None,
     ) -> None:
         self._world = world
         self._fault_scheduler = fault_scheduler
         self._clock = clock
         self._allowed_tools = set(allowed_tools) if allowed_tools is not None else None
+        self._convergence_tracker = convergence_tracker
+        self._last_handoff_payload: dict[str, Any] | None = None
 
     def _check_tool_allowed(self, tool_name: str) -> None:
         if self._allowed_tools is not None and tool_name not in self._allowed_tools:
@@ -78,7 +82,7 @@ class ToolGateway:
 
         state_version = str(final_data.get("version", "v1"))
 
-        return ToolObservation(
+        final_obs = ToolObservation(
             name=name,
             target=target,
             state_version=state_version,
@@ -86,6 +90,12 @@ class ToolGateway:
             data=copy.deepcopy(final_data),
             source="world",
         )
+
+        # Track node-local observation for convergence evaluation
+        if self._convergence_tracker is not None and node_id:
+            self._convergence_tracker.observe(node_id, target, final_obs)
+
+        return final_obs
 
     def act(
         self,
@@ -152,7 +162,7 @@ class ToolGateway:
 
         effect_id = final_result.effect.effect_id if final_result.effect else None
 
-        return ToolOutcome(
+        outcome = ToolOutcome(
             status=final_result.status,
             effect_id=effect_id,
             operation_id=operation_id,
@@ -163,6 +173,12 @@ class ToolGateway:
             applied_fields=final_result.applied_fields,
             omitted_fields=final_result.omitted_fields,
         )
+
+        # Track operation outcome for convergence evaluation
+        if self._convergence_tracker is not None and node_id:
+            self._convergence_tracker.record_outcome(node_id, operation_id, outcome)
+
+        return outcome
 
     def check_approval(
         self,
@@ -183,5 +199,14 @@ class ToolGateway:
 
         dispatch = self._fault_scheduler.handoff_emit(payload, self._clock)
         if dispatch.applied and dispatch.modified_handoff is not None:
-            return copy.deepcopy(dispatch.modified_handoff)
-        return copy.deepcopy(payload)
+            emitted = copy.deepcopy(dispatch.modified_handoff)
+        else:
+            emitted = copy.deepcopy(payload)
+
+        # Capture the actual (post-fault) handoff for oracle evaluation
+        self._last_handoff_payload = copy.deepcopy(emitted)
+        return emitted
+
+    def last_handoff_payload(self) -> dict[str, Any] | None:
+        """Return the most recent emitted handoff payload (post-fault), or None."""
+        return copy.deepcopy(self._last_handoff_payload) if self._last_handoff_payload is not None else None

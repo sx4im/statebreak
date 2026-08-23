@@ -6,6 +6,7 @@ import socket
 from unittest import mock
 
 import pytest
+
 from statebreak import __version__
 from statebreak.cli import main
 

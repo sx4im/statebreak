@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import jsonschema
+
 from statebreak.report import render_json, render_markdown, render_sarif
 from statebreak.runner import ScenarioRunner
 
