@@ -8,7 +8,6 @@ from statebreak.adapter import (
     HandoffPayload,
     ToolObservation,
     ToolOutcome,
-    ToolRequest,
 )
 from statebreak.adapters import GuardedAdapter, MultiNodeAdapter, NaiveAdapter
 from statebreak.canonical import canonical_json, compute_scenario_hash, compute_sha256
@@ -92,7 +91,6 @@ __all__ = [
     "ToolGateway",
     "ToolObservation",
     "ToolOutcome",
-    "ToolRequest",
     "UsageError",
     "VirtualClock",
     "__version__",

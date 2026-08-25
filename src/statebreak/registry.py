@@ -12,6 +12,11 @@ implement it in the corresponding engine — then both sides stay in sync.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from statebreak.models import Finding
+
 # ---------------------------------------------------------------------------
 # Fault types
 # ---------------------------------------------------------------------------
@@ -22,6 +27,15 @@ FAULT_DUPLICATE_RETRY = "duplicate_retry"
 FAULT_WRONG_TARGET = "wrong_target"
 FAULT_PARTIAL_WRITE = "partial_write"
 FAULT_HANDOFF_TRUNCATION = "handoff_truncation"
+
+#: Target suffix substituted by the ``wrong_target`` fault when a scenario
+#: does not declare ``params.substitute_target`` explicitly.
+WRONG_TARGET_SUFFIX = "-drift"
+
+#: Handoff fields dropped by the ``handoff_truncation`` fault when a scenario
+#: does not declare ``params.truncated_fields`` explicitly. Mirrors the
+#: structural fields of :class:`statebreak.adapter.HandoffPayload`.
+DEFAULT_HANDOFF_TRUNCATED_FIELDS = ("constraints", "context", "history")
 
 VALID_FAULT_TYPES = frozenset(
     {
@@ -82,9 +96,59 @@ VALID_ORACLE_TYPES = frozenset(
 )
 
 # ---------------------------------------------------------------------------
+# Finding ordering (shared vocabulary for deterministic reports)
+# ---------------------------------------------------------------------------
+SEVERITY_ORDER: dict[str, int] = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+    "info": 4,
+}
+
+
+def sort_findings(findings: tuple[Finding, ...]) -> tuple[Finding, ...]:
+    """Order findings deterministically by (blocking desc, severity, finding ID)."""
+    return tuple(
+        sorted(
+            findings,
+            key=lambda f: (
+                0 if f.blocking else 1,
+                SEVERITY_ORDER.get(f.severity, 99),
+                f.finding_id,
+            ),
+        )
+    )
+
+# ---------------------------------------------------------------------------
 # Default multi-node topology
 # ---------------------------------------------------------------------------
 DEFAULT_NODE_IDS = ("node-01", "node-02", "node-03")
+
+#: Default single-node identity when a scenario does not declare nodes.
+DEFAULT_NODE_ID = "node-01"
+
+#: Default run identifier when none is supplied.
+DEFAULT_RUN_ID = "run_default"
+
+#: Recipient wildcard in :meth:`statebreak.coordination.MessageQueue.send`
+#: meaning "every registered node except the sender".
+BROADCAST_RECIPIENT = "*"
+
+# ---------------------------------------------------------------------------
+# Reference adapter names
+#
+# Canonical keys for ScenarioRunner.resolve_adapter. Aliases are normalized
+# by lowercasing, replacing "-" with "_", and stripping a trailing
+# "_adapter", so "guarded-adapter" resolves to "guarded".
+# ---------------------------------------------------------------------------
+ADAPTER_GUARDED = "guarded"
+ADAPTER_NAIVE = "naive"
+ADAPTER_MULTI_NODE = "multi_node"
+
+VALID_ADAPTER_NAMES = frozenset(
+    {ADAPTER_GUARDED, ADAPTER_NAIVE, ADAPTER_MULTI_NODE}
+)
 
 # ---------------------------------------------------------------------------
 # Agent claim vocabulary (shared contract between adapters and the oracle)

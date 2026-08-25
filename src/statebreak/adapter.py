@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from statebreak.errors import StateBreakError
 from statebreak.models import AdapterResult, AgentClaim
+from statebreak.registry import DEFAULT_NODE_ID, DEFAULT_RUN_ID
+
+if TYPE_CHECKING:
+    from statebreak.clock import VirtualClock
+    from statebreak.coordination import MessageQueue
+    from statebreak.gateway import ToolGateway
 
 __all__ = [
     "AdapterContext",
@@ -18,7 +24,6 @@ __all__ = [
     "HandoffPayload",
     "ToolObservation",
     "ToolOutcome",
-    "ToolRequest",
 ]
 
 
@@ -27,17 +32,6 @@ class AdapterError(StateBreakError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, exit_code=3)
-
-
-@dataclass(frozen=True)
-class ToolRequest:
-    """Declared intent to execute a tool operation through the gateway."""
-
-    name: str
-    target: str
-    payload: dict[str, Any] = field(default_factory=dict)
-    operation_id: str | None = None
-    expected_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -52,7 +46,6 @@ class ToolObservation:
     source: str = "world"
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert observation to dictionary."""
         return asdict(self)
 
 
@@ -71,7 +64,6 @@ class ToolOutcome:
     omitted_fields: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert outcome to dictionary."""
         return asdict(self)
 
 
@@ -86,7 +78,6 @@ class HandoffPayload:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert handoff payload to dictionary."""
         return asdict(self)
 
 
@@ -107,7 +98,6 @@ class CoordinationMessage:
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert coordination message to dictionary."""
         return asdict(self)
 
 
@@ -122,13 +112,13 @@ class AdapterContext:
         self,
         task_instruction: str,
         allowed_tools: tuple[str, ...],
-        gateway: Any,
-        clock: Any,
-        node_id: str = "node-01",
-        run_id: str = "run_default",
+        gateway: ToolGateway | None,
+        clock: VirtualClock,
+        node_id: str = DEFAULT_NODE_ID,
+        run_id: str = DEFAULT_RUN_ID,
         scenario_id: str = "scenario_default",
         seed: int = 42,
-        coordination: Any | None = None,
+        coordination: MessageQueue | None = None,
         task_params: dict[str, Any] | None = None,
     ) -> None:
         self.task_instruction = task_instruction
@@ -154,7 +144,7 @@ class AdapterContext:
 
     def get_current_time(self) -> str:
         """Return current virtual time ISO string without wall-clock leaks."""
-        return self.clock.now_iso() if hasattr(self.clock, "now_iso") else str(self.clock)
+        return self.clock.now_iso()
 
 
 @runtime_checkable

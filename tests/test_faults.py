@@ -16,8 +16,7 @@ def test_fault_scheduler_valid_construction() -> None:
         FaultSpec(id="f1", at="before_commit", type="approval_expired", target="appr-1"),
         FaultSpec(id="f2", at="after_read", type="stale_read", target="rec-1", repeat=2),
     )
-    scheduler = FaultScheduler(faults, seed=123)
-    assert scheduler.seed == 123
+    scheduler = FaultScheduler(faults)
     assert scheduler.get_fault("f1") is not None
     assert scheduler.get_fault("f2") is not None
     assert scheduler.get_fault("f_missing") is None
@@ -134,7 +133,6 @@ def test_fault_event_serialization() -> None:
         virtual_timestamp="2026-01-01T09:00:00Z",
         target_entity_id="rec-1",
         trigger_count=1,
-        seed=42,
         status="applied",
         reason="injected stale read",
     )

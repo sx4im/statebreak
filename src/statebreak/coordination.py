@@ -9,6 +9,7 @@ from statebreak.adapter import CoordinationMessage
 from statebreak.canonical import canonical_json, compute_sha256
 from statebreak.clock import VirtualClock
 from statebreak.errors import UsageError
+from statebreak.registry import BROADCAST_RECIPIENT, DEFAULT_NODE_IDS, DEFAULT_RUN_ID
 
 MAX_MESSAGE_PAYLOAD_SIZE = 65_536  # 64 KB
 MAX_QUEUE_CAPACITY = 1_000
@@ -19,8 +20,8 @@ class MessageQueue:
 
     def __init__(
         self,
-        nodes: tuple[str, ...] | list[str] = ("node-01", "node-02"),
-        run_id: str = "run_default",
+        nodes: tuple[str, ...] | list[str] = DEFAULT_NODE_IDS,
+        run_id: str = DEFAULT_RUN_ID,
     ) -> None:
         self._run_id = run_id
         self._nodes = set(nodes)
@@ -56,7 +57,12 @@ class MessageQueue:
         expected_version: str | None = None,
         clock: VirtualClock | None = None,
     ) -> CoordinationMessage:
-        """Enqueue a typed coordination message to recipient node or broadcast with '*'."""
+        """Enqueue a typed coordination message to a recipient or broadcast with '*'.
+
+        Returns the message enqueued for the last recipient. A ``None`` clock
+        records an empty virtual timestamp; callers running inside a scenario
+        should always pass the scenario clock.
+        """
         if sender_id not in self._nodes:
             raise UsageError(
                 f"unknown sender node '{sender_id}' (registered: {sorted(self._nodes)})"
@@ -75,7 +81,7 @@ class MessageQueue:
 
         recipients = (
             [nid for nid in sorted(self._nodes) if nid != sender_id]
-            if recipient_id == "*"
+            if recipient_id == BROADCAST_RECIPIENT
             else [recipient_id]
         )
 
@@ -124,14 +130,6 @@ class MessageQueue:
             return None
         return self._mailboxes[node_id].pop(0)
 
-    def peek(self, node_id: str) -> CoordinationMessage | None:
-        """Inspect the oldest pending message without popping it."""
-        if node_id not in self._nodes:
-            raise UsageError(f"unknown node '{node_id}'")
-        if not self._mailboxes[node_id]:
-            return None
-        return self._mailboxes[node_id][0]
-
     def receive_all(self, node_id: str) -> tuple[CoordinationMessage, ...]:
         """Pop and return all pending messages for node_id."""
         if node_id not in self._nodes:
@@ -143,40 +141,6 @@ class MessageQueue:
     def has_messages(self, node_id: str) -> bool:
         """Check if node_id has any pending messages."""
         return node_id in self._nodes and len(self._mailboxes[node_id]) > 0
-
-    def pending_count(self, node_id: str) -> int:
-        """Return number of pending messages for node_id."""
-        return len(self._mailboxes.get(node_id, []))
-
-    def duplicate_message(self, message_id: str) -> bool:
-        """Duplicate an existing message in its recipient queue to simulate network duplicate."""
-        for box in self._mailboxes.values():
-            for i, msg in enumerate(box):
-                if msg.message_id == message_id:
-                    dup = copy.deepcopy(msg)
-                    box.insert(i + 1, dup)
-                    return True
-        return False
-
-    def drop_message(self, message_id: str) -> bool:
-        """Simulate packet loss by removing a message from the recipient queue before delivery."""
-        for box in self._mailboxes.values():
-            for i, msg in enumerate(box):
-                if msg.message_id == message_id:
-                    box.pop(i)
-                    return True
-        return False
-
-    def reorder_messages(self, node_id: str, new_indices: list[int]) -> None:
-        """Deterministically reorder pending messages in a node's mailbox."""
-        if node_id not in self._nodes:
-            raise UsageError(f"unknown node '{node_id}'")
-        box = self._mailboxes[node_id]
-        if len(new_indices) != len(box) or set(new_indices) != set(range(len(box))):
-            raise UsageError(
-                f"invalid reorder permutation for {len(box)} messages: {new_indices}"
-            )
-        self._mailboxes[node_id] = [box[i] for i in new_indices]
 
     def get_history(self) -> tuple[CoordinationMessage, ...]:
         """Return complete chronological history of all sent messages."""

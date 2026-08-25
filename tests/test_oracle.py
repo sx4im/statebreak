@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from statebreak.adapter import ToolObservation
 from statebreak.clock import VirtualClock
 from statebreak.convergence import ConvergenceTracker
 from statebreak.faults import FaultEvent
@@ -187,7 +188,11 @@ def test_oracle_convergence_verified() -> None:
     world = LocalWorld({"entities": [{"id": "shared-1", "val": 10}]})
     world.update_entity("shared-1", {"val": 20})  # Now v2
     tracker = ConvergenceTracker()
-    tracker.observe("node-01", "shared-1", {"version": "v1"})  # Stale v1
+    tracker.observe(
+        "node-01",
+        "shared-1",
+        ToolObservation("read", "shared-1", "v1", clock.now_iso(), None),  # Stale v1
+    )
 
     engine = OracleEngine()
     oracle = OracleSpec(id="conv-check", type="convergence_verified")

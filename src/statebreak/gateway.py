@@ -10,7 +10,12 @@ from statebreak.clock import VirtualClock
 from statebreak.convergence import ConvergenceTracker
 from statebreak.errors import UsageError
 from statebreak.faults import FaultScheduler
-from statebreak.world import ApprovalObservation, LocalWorld, MutationResult
+from statebreak.world import (
+    DEFAULT_VERSION,
+    ApprovalObservation,
+    LocalWorld,
+    MutationResult,
+)
 
 
 class ToolGateway:
@@ -60,7 +65,7 @@ class ToolGateway:
             return ToolObservation(
                 name=name,
                 target=target,
-                state_version="v0",
+                state_version=DEFAULT_VERSION,
                 observed_at=observed_at,
                 data=None,
                 source="world",
@@ -183,7 +188,6 @@ class ToolGateway:
     def check_approval(
         self,
         approval_id: str,
-        node_id: str | None = None,
     ) -> ApprovalObservation:
         """Check status of an approval entity against current virtual clock."""
         return self._world.check_approval(approval_id, self._clock)
@@ -191,7 +195,6 @@ class ToolGateway:
     def emit_handoff(
         self,
         payload: dict[str, Any],
-        node_id: str | None = None,
     ) -> dict[str, Any]:
         """Emit a handoff payload, subject to fault interception (e.g. handoff_truncation)."""
         if not isinstance(payload, dict):

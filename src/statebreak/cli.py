@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 from collections.abc import Sequence
@@ -13,11 +14,22 @@ from typing import Any, NoReturn
 import jsonschema
 
 from statebreak import __version__
+from statebreak.colors import dim, green, red, yellow
 from statebreak.errors import ConfigurationError, StateBreakError, UsageError
 from statebreak.models import Finding, RunReport
+from statebreak.registry import ADAPTER_GUARDED, ADAPTER_MULTI_NODE, ADAPTER_NAIVE
 from statebreak.report import render_json, render_markdown, render_sarif
 from statebreak.runner import ScenarioRunner
 from statebreak.scenario import _find_schema_path, load_scenario
+
+
+def _color_enabled(no_color_flag: bool = False) -> bool:
+    """Shared gate for CLI coloring: TTY plus NO_COLOR/FORCE_COLOR conventions."""
+    if no_color_flag or os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 
 def _load_report_schema() -> dict[str, Any]:
@@ -85,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     val_p.add_argument("path", help="Path to scenario YAML file or directory.")
     val_p.add_argument("--json", action="store_true", help="Output results as JSON.")
+    val_p.add_argument(
+        "--no-color", action="store_true", help="Disable colored output."
+    )
 
     # list command
     list_p = subparsers.add_parser(
@@ -97,6 +112,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to scenarios directory (default: scenarios).",
     )
     list_p.add_argument("--json", action="store_true", help="Output list as JSON.")
+    list_p.add_argument(
+        "--no-color", action="store_true", help="Disable colored output."
+    )
 
     # run command
     run_p = subparsers.add_parser(
@@ -129,6 +147,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write report to output file instead of stdout.",
     )
+    run_p.add_argument(
+        "--no-color", action="store_true", help="Disable colored output."
+    )
 
     # report command
     rep_p = subparsers.add_parser(
@@ -158,7 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def handle_validate(path_str: str, as_json: bool = False) -> int:
+def handle_validate(path_str: str, as_json: bool = False, no_color: bool = False) -> int:
     """Validate scenario file or directory against schema."""
     target_path = Path(path_str)
     if not target_path.exists():
@@ -173,6 +194,7 @@ def handle_validate(path_str: str, as_json: bool = False) -> int:
     if not files:
         raise UsageError(f"no YAML scenario files found in {path_str}")
 
+    use_color = _color_enabled(no_color)
     results: list[dict[str, Any]] = []
     has_errors = False
 
@@ -181,12 +203,14 @@ def handle_validate(path_str: str, as_json: bool = False) -> int:
             sc = load_scenario(f)
             results.append({"path": str(f), "id": sc.id, "valid": True})
             if not as_json:
-                sys.stdout.write(f"✓ {f}: valid scenario (id: {sc.id})\n")
+                mark = green("✓") if use_color else "✓"
+                sys.stdout.write(f"{mark} {f}: valid scenario (id: {sc.id})\n")
         except ConfigurationError as e:
             has_errors = True
             results.append({"path": str(f), "valid": False, "error": str(e)})
             if not as_json:
-                sys.stderr.write(f"✗ {f}: invalid ({e})\n")
+                mark = red("✗") if use_color else "✗"
+                sys.stderr.write(f"{mark} {f}: invalid ({e})\n")
 
     if as_json:
         sys.stdout.write(json.dumps(results, indent=2) + "\n")
@@ -194,7 +218,7 @@ def handle_validate(path_str: str, as_json: bool = False) -> int:
     return 2 if has_errors else 0
 
 
-def handle_list(path_str: str, as_json: bool = False) -> int:
+def handle_list(path_str: str, as_json: bool = False, no_color: bool = False) -> int:
     """List available scenarios and reference adapters."""
     target_path = Path(path_str)
     scenario_list: list[dict[str, Any]] = []
@@ -218,25 +242,32 @@ def handle_list(path_str: str, as_json: bool = False) -> int:
                 sys.stderr.write(f"warning: skipping {f}: {e}\n")
 
     adapters = [
-        {"name": "guarded", "description": "Guarded adapter with freshness & reconciliation"},
-        {"name": "naive", "description": "Naive adapter with stale-state reuse"},
-        {"name": "multi_node", "description": "Multi-node coordinating adapter"},
+        {"name": ADAPTER_GUARDED, "description": "Guarded adapter with freshness & reconciliation"},
+        {"name": ADAPTER_NAIVE, "description": "Naive adapter with stale-state reuse"},
+        {"name": ADAPTER_MULTI_NODE, "description": "Multi-node coordinating adapter"},
     ]
 
     if as_json:
         out = {"scenarios": scenario_list, "adapters": adapters}
         sys.stdout.write(json.dumps(out, indent=2) + "\n")
-    else:
-        sys.stdout.write("Available Scenarios:\n")
-        if not scenario_list:
-            sys.stdout.write("  (No scenario files found)\n")
-        for sc_info in scenario_list:
-            faults_str = ", ".join(sc_info["faults"]) if sc_info["faults"] else "none"
-            sys.stdout.write(f"  - {sc_info['id']:<24} (faults: {faults_str})\n")
+        return 0
 
-        sys.stdout.write("\nAvailable Reference Adapters:\n")
-        for a in adapters:
-            sys.stdout.write(f"  - {a['name']:<14} {a['description']}\n")
+    use_color = _color_enabled(no_color)
+    sys.stdout.write("Available Scenarios:\n")
+    if not scenario_list:
+        sys.stdout.write("  (No scenario files found)\n")
+    for sc_info in scenario_list:
+        faults = sc_info["faults"]
+        if faults:
+            faults_str = ", ".join(yellow(ft) if use_color else ft for ft in faults)
+        else:
+            faults_str = dim("none") if use_color else "none"
+        # The ID column stays uncolored so alignment padding remains exact.
+        sys.stdout.write(f"  - {sc_info['id']:<24} (faults: {faults_str})\n")
+
+    sys.stdout.write("\nAvailable Reference Adapters:\n")
+    for a in adapters:
+        sys.stdout.write(f"  - {a['name']:<14} {a['description']}\n")
 
     return 0
 
@@ -247,6 +278,7 @@ def handle_run(
     seed: int | None,
     fmt: str,
     output_file: str | None,
+    no_color: bool = False,
 ) -> int:
     """Execute scenario and emit formatted report."""
     runner = ScenarioRunner()
@@ -257,7 +289,8 @@ def handle_run(
     elif fmt == "sarif":
         rendered = json.dumps(render_sarif(report), indent=2)
     else:
-        rendered = render_markdown(report)
+        # Colors only decorate the human path; files and non-TTY sinks stay plain.
+        rendered = render_markdown(report, color=_color_enabled(no_color))
 
     if output_file:
         out_p = Path(output_file)
@@ -412,9 +445,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys.stdout.write(f"statebreak {__version__}\n")
             return 0
         elif cmd == "validate":
-            return handle_validate(args.path, as_json=getattr(args, "json", False))
+            return handle_validate(
+                args.path, as_json=getattr(args, "json", False), no_color=args.no_color
+            )
         elif cmd == "list":
-            return handle_list(args.path, as_json=getattr(args, "json", False))
+            return handle_list(
+                args.path, as_json=getattr(args, "json", False), no_color=args.no_color
+            )
         elif cmd == "run":
             return handle_run(
                 args.scenario,
@@ -422,6 +459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seed=args.seed,
                 fmt=args.format,
                 output_file=args.output,
+                no_color=args.no_color,
             )
         elif cmd == "report":
             return handle_report(args.path, fmt=args.format, output_file=args.output)

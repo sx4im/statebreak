@@ -12,7 +12,6 @@ from statebreak.adapter import (
     HandoffPayload,
     ToolObservation,
     ToolOutcome,
-    ToolRequest,
 )
 from statebreak.clock import VirtualClock
 
@@ -83,10 +82,6 @@ def test_dummy_adapter_run() -> None:
 
 
 def test_tool_data_models_serialization() -> None:
-    req = ToolRequest(name="read", target="rec-1", payload={"key": "val"}, operation_id="op_1")
-    assert req.name == "read"
-    assert req.target == "rec-1"
-
     obs = ToolObservation(
         name="read",
         target="rec-1",

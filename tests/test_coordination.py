@@ -30,13 +30,6 @@ def test_coordination_node_registration_and_send_receive() -> None:
     assert msg.sender_id == "node-01"
     assert msg.recipient_id == "node-02"
     assert queue.has_messages("node-02")
-    assert queue.pending_count("node-02") == 1
-
-    # Peek without popping
-    peeked = queue.peek("node-02")
-    assert peeked is not None
-    assert peeked.message_id == "msg_run-test_0001"
-    assert queue.pending_count("node-02") == 1
 
     # Receive
     rec = queue.receive("node-02")
@@ -55,61 +48,25 @@ def test_coordination_broadcast() -> None:
         message_type="sync_announcement",
         payload={"state": "v2"},
     )
-    assert queue.pending_count("node-01") == 0
-    assert queue.pending_count("node-02") == 1
-    assert queue.pending_count("node-03") == 1
+    assert not queue.has_messages("node-01")
+    assert queue.has_messages("node-02")
+    assert queue.has_messages("node-03")
 
 
-def test_coordination_duplicate_message_delivery() -> None:
-    queue = MessageQueue(nodes=["node-01", "node-02"], run_id="run-dup")
-
-    msg = queue.send("node-01", "node-02", "task", {"id": 1})
-    assert queue.pending_count("node-02") == 1
-
-    # Inject duplicate
-    dup_ok = queue.duplicate_message(msg.message_id)
-    assert dup_ok is True
-    assert queue.pending_count("node-02") == 2
-
-    m1 = queue.receive("node-02")
-    m2 = queue.receive("node-02")
-    assert m1 is not None and m2 is not None
-    assert m1.message_id == m2.message_id
-    assert m1.payload == m2.payload
-
-
-def test_coordination_drop_message_delivery() -> None:
-    queue = MessageQueue(nodes=["node-01", "node-02"], run_id="run-drop")
-
-    msg = queue.send("node-01", "node-02", "task", {"id": 1})
-    assert queue.pending_count("node-02") == 1
-
-    # Drop message
-    drop_ok = queue.drop_message(msg.message_id)
-    assert drop_ok is True
-    assert queue.pending_count("node-02") == 0
-    assert queue.receive("node-02") is None
-
-
-def test_coordination_deterministic_reordering() -> None:
-    queue = MessageQueue(nodes=["node-01", "node-02"], run_id="run-reorder")
+def test_coordination_fifo_ordering() -> None:
+    queue = MessageQueue(nodes=["node-01", "node-02"], run_id="run-fifo")
 
     queue.send("node-01", "node-02", "msg", {"seq": 1})
     queue.send("node-01", "node-02", "msg", {"seq": 2})
     queue.send("node-01", "node-02", "msg", {"seq": 3})
 
-    assert queue.pending_count("node-02") == 3
-
-    # Reorder [0, 1, 2] -> [2, 0, 1]
-    queue.reorder_messages("node-02", [2, 0, 1])
-
     m1 = queue.receive("node-02")
     m2 = queue.receive("node-02")
     m3 = queue.receive("node-02")
 
-    assert m1 is not None and m1.payload["seq"] == 3
-    assert m2 is not None and m2.payload["seq"] == 1
-    assert m3 is not None and m3.payload["seq"] == 2
+    assert m1 is not None and m1.payload["seq"] == 1
+    assert m2 is not None and m2.payload["seq"] == 2
+    assert m3 is not None and m3.payload["seq"] == 3
 
 
 def test_coordination_unknown_node_rejections() -> None:
@@ -135,5 +92,5 @@ def test_coordination_reset_and_history() -> None:
     # Reset
     queue.reset()
     assert len(queue.get_history()) == 0
-    assert queue.pending_count("node-01") == 0
-    assert queue.pending_count("node-02") == 0
+    assert not queue.has_messages("node-01")
+    assert not queue.has_messages("node-02")

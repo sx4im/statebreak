@@ -44,6 +44,13 @@ def format_iso_utc(dt: datetime) -> str:
     return s
 
 
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize a datetime to UTC, interpreting naive values as UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
 class VirtualClock:
     """Deterministic virtual clock isolated from host wall-clock time."""
 
@@ -52,10 +59,7 @@ class VirtualClock:
             self._start_dt = parse_iso_utc(start.start)
             self._step_seconds = int(start.step_seconds)
         elif isinstance(start, datetime):
-            if start.tzinfo is None:
-                self._start_dt = start.replace(tzinfo=UTC)
-            else:
-                self._start_dt = start.astimezone(UTC)
+            self._start_dt = _as_utc(start)
             self._step_seconds = int(step_seconds)
         elif isinstance(start, str):
             self._start_dt = parse_iso_utc(start)
@@ -72,25 +76,20 @@ class VirtualClock:
 
     @property
     def start_time(self) -> datetime:
-        """Return the initial start datetime in UTC."""
         return self._start_dt
 
     @property
     def start_iso(self) -> str:
-        """Return initial start ISO timestamp string."""
         return format_iso_utc(self._start_dt)
 
     @property
     def step_seconds(self) -> int:
-        """Return default step advancement in seconds."""
         return self._step_seconds
 
     def now(self) -> datetime:
-        """Return the current virtual UTC datetime."""
         return self._current_dt
 
     def now_iso(self) -> str:
-        """Return the current virtual time formatted as canonical ISO 8601 UTC string."""
         return format_iso_utc(self._current_dt)
 
     def advance(self, duration: float | timedelta) -> str:
@@ -129,35 +128,13 @@ class VirtualClock:
         if isinstance(expiry, str):
             expiry_dt = parse_iso_utc(expiry)
         elif isinstance(expiry, datetime):
-            if expiry.tzinfo is None:
-                expiry_dt = expiry.replace(tzinfo=UTC)
-            else:
-                expiry_dt = expiry.astimezone(UTC)
+            expiry_dt = _as_utc(expiry)
         else:
             raise UsageError(f"unsupported expiry type: {type(expiry)}")
 
         return self._current_dt >= expiry_dt
 
-    def compare(self, target: str | datetime) -> int:
-        """Compare current virtual time to target (-1 if before, 0 if equal, 1 if after)."""
-        if isinstance(target, str):
-            target_dt = parse_iso_utc(target)
-        elif isinstance(target, datetime):
-            if target.tzinfo is None:
-                target_dt = target.replace(tzinfo=UTC)
-            else:
-                target_dt = target.astimezone(UTC)
-        else:
-            raise UsageError(f"unsupported target type: {type(target)}")
-
-        if self._current_dt < target_dt:
-            return -1
-        if self._current_dt > target_dt:
-            return 1
-        return 0
-
     def reset(self) -> None:
-        """Reset virtual clock back to its initial start timestamp."""
         self._current_dt = self._start_dt
 
     def clone(self) -> VirtualClock:
@@ -167,7 +144,6 @@ class VirtualClock:
         return cloned
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize clock state to dictionary."""
         return {
             "start": self.start_iso,
             "current": self.now_iso(),

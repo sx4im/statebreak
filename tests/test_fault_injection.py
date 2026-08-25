@@ -23,7 +23,7 @@ def test_fault_stale_read_injection() -> None:
         target="example-001",
         params={"stale_version": "v1", "stale_status": "pending"},
     )
-    scheduler = FaultScheduler([fault], seed=41)
+    scheduler = FaultScheduler([fault])
 
     # Agent reads authoritative state (which is currently completed at v2)
     obs = world.get_entity("example-001")
@@ -72,7 +72,7 @@ def test_fault_approval_expired_injection() -> None:
         type="approval_expired",
         target="appr-001",
     )
-    scheduler = FaultScheduler([fault], seed=41)
+    scheduler = FaultScheduler([fault])
 
     # Initially valid approval
     assert world.check_approval("appr-001", clock).is_valid is True
@@ -97,7 +97,7 @@ def test_fault_timeout_after_commit_injection() -> None:
         type="timeout_after_commit",
         target="example-001",
     )
-    scheduler = FaultScheduler([fault], seed=42)
+    scheduler = FaultScheduler([fault])
 
     # Commit mutation in world
     mutation_res = world.update_entity(
@@ -144,7 +144,7 @@ def test_fault_duplicate_retry_injection() -> None:
         type="duplicate_retry",
         target="example-001",
     )
-    scheduler = FaultScheduler([fault], seed=45)
+    scheduler = FaultScheduler([fault])
 
     # First attempt with operation_id="op_charge_1"
     res1 = world.update_entity(
@@ -189,7 +189,7 @@ def test_fault_wrong_target_injection() -> None:
         target="account-100",
         params={"substitute_target": "account-100-drift"},
     )
-    scheduler = FaultScheduler([fault], seed=43)
+    scheduler = FaultScheduler([fault])
 
     # Scheduler intercepts before_commit and substitutes target
     dispatch_res = scheduler.before_commit(
@@ -235,7 +235,7 @@ def test_fault_partial_write_injection() -> None:
         target="record-01",
         params={"applied_fields": ["name"], "omitted_fields": ["address", "synced"]},
     )
-    scheduler = FaultScheduler([fault], seed=44)
+    scheduler = FaultScheduler([fault])
 
     # World applies partial write
     mutation_res = world.partial_update_entity(
@@ -270,7 +270,7 @@ def test_fault_handoff_truncation_injection() -> None:
         type="handoff_truncation",
         params={"truncated_fields": ["safety_constraints", "approval_token"]},
     )
-    scheduler = FaultScheduler([fault], seed=46)
+    scheduler = FaultScheduler([fault])
 
     payload = {
         "task_id": "task-999",
@@ -302,7 +302,7 @@ def test_deterministic_replay_across_runs() -> None:
                 target="e1",
             ),
         )
-        sched = FaultScheduler(faults, seed=seed)
+        sched = FaultScheduler(faults)
 
         # 1. Read
         obs = world.get_entity("e1")

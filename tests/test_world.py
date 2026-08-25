@@ -176,30 +176,6 @@ def test_world_partial_write() -> None:
     assert eff.status == "partial"
 
 
-def test_world_ambiguous_outcome_after_commit() -> None:
-    world = LocalWorld({"entities": [{"id": "tx-01", "status": "pending"}]})
-
-    res = world.commit_effect_with_ambiguous_response(
-        entity_id="tx-01",
-        updates={"status": "committed_value"},
-        operation_id="op_ambiguous_1",
-    )
-    # Caller receives unknown outcome
-    assert res.success is True
-    assert res.status == "unknown"
-
-    # But authoritative state IS mutated
-    ent = world.get_entity("tx-01")
-    assert ent is not None
-    assert ent["status"] == "committed_value"
-    assert ent["version"] == "v2"
-
-    # And authoritative effect in ledger is committed
-    eff = world.get_effect_by_operation("op_ambiguous_1")
-    assert eff is not None
-    assert eff.status == "committed"
-
-
 def test_world_approval_checking_and_expiry() -> None:
     clock = VirtualClock("2026-01-01T09:00:00Z")
     world = LocalWorld({

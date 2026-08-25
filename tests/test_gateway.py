@@ -15,7 +15,7 @@ from statebreak.world import LocalWorld
 def test_gateway_tool_allowlist_enforcement() -> None:
     clock = VirtualClock("2026-01-01T09:00:00Z")
     world = LocalWorld({"entities": [{"id": "e1", "status": "pending"}]})
-    sched = FaultScheduler([], seed=42)
+    sched = FaultScheduler([])
     gateway = ToolGateway(world, sched, clock, allowed_tools=("read_state", "commit_effect"))
 
     # Allowed read
@@ -42,7 +42,7 @@ def test_gateway_read_and_stale_fault_interception() -> None:
         target="e1",
         params={"stale_version": "v1", "stale_status": "pending"},
     )
-    sched = FaultScheduler([fault], seed=42)
+    sched = FaultScheduler([fault])
     gateway = ToolGateway(world, sched, clock)
 
     obs = gateway.read("read", "e1")
@@ -64,7 +64,7 @@ def test_gateway_act_and_timeout_after_commit() -> None:
         type="timeout_after_commit",
         target="e1",
     )
-    sched = FaultScheduler([fault], seed=42)
+    sched = FaultScheduler([fault])
     gateway = ToolGateway(world, sched, clock)
 
     outcome = gateway.act("commit", "e1", {"status": "completed"}, operation_id="op_tx_1")
@@ -95,7 +95,7 @@ def test_gateway_act_wrong_target_interception() -> None:
         target="account-A",
         params={"substitute_target": "account-A-drift"},
     )
-    sched = FaultScheduler([fault], seed=42)
+    sched = FaultScheduler([fault])
     gateway = ToolGateway(world, sched, clock)
 
     outcome = gateway.act("transfer", "account-A", {"balance": 50}, operation_id="op_tr_1")
@@ -116,7 +116,7 @@ def test_gateway_act_wrong_target_interception() -> None:
 def test_gateway_expected_version_conflict() -> None:
     clock = VirtualClock("2026-01-01T09:00:00Z")
     world = LocalWorld({"entities": [{"id": "e1", "status": "pending"}]})
-    sched = FaultScheduler([], seed=42)
+    sched = FaultScheduler([])
     gateway = ToolGateway(world, sched, clock)
 
     # First update increments to v2
@@ -146,7 +146,7 @@ def test_gateway_expected_version_conflict() -> None:
 def test_gateway_idempotency_duplicate_operation() -> None:
     clock = VirtualClock("2026-01-01T09:00:00Z")
     world = LocalWorld({"entities": [{"id": "e1", "counter": 0}]})
-    sched = FaultScheduler([], seed=42)
+    sched = FaultScheduler([])
     gateway = ToolGateway(world, sched, clock)
 
     out1 = gateway.act("increment", "e1", {"counter": 1}, operation_id="op_idempotent")
@@ -170,7 +170,7 @@ def test_gateway_handoff_truncation_interception() -> None:
         type="handoff_truncation",
         params={"truncated_fields": ["auth_token"]},
     )
-    sched = FaultScheduler([fault], seed=42)
+    sched = FaultScheduler([fault])
     gateway = ToolGateway(world, sched, clock)
 
     payload = {"task": "verify", "auth_token": "secret-123", "status": "ok"}

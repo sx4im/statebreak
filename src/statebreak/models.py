@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from statebreak.registry import DEFAULT_NODE_IDS
+
 
 @dataclass(frozen=True)
 class ClockSpec:
@@ -79,6 +81,18 @@ class Scenario:
         if self.scenario_hash is None:
             raw_dict.pop("scenario_hash", None)
         return raw_dict
+
+    @property
+    def node_ids(self) -> tuple[str, ...]:
+        """Declared multi-node topology, or the registry default.
+
+        Scenarios declare ``world.nodes``; anything else falls back to
+        :data:`statebreak.registry.DEFAULT_NODE_IDS`.
+        """
+        raw_nodes = self.world.get("nodes")
+        if isinstance(raw_nodes, list) and raw_nodes:
+            return tuple(str(n) for n in raw_nodes)
+        return DEFAULT_NODE_IDS
 
 
 @dataclass(frozen=True)

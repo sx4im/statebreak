@@ -181,3 +181,75 @@ Independent audit found the second pass left the tree red in three places; all f
 - **Fix:** examples corrected; new "Idempotency Semantics" section documents that a replayed `operation_id` with a different payload returns the original effect without applying the new payload.
 
 **Verification after pass 3:** `make check` exit 0 (ruff clean, mypy strict clean, 173 passed), wheel + sdist build, wheel installs and runs in a fresh venv, CLI smoke exits 0/0/1, adversarial probes 7/7.
+
+---
+
+## Squash log — 2026-08-25 (fourth pass: AI-smell audit remediation + terminal color)
+
+File-by-file audit of `src/statebreak/` for AI-generated code smell (speculative APIs,
+copy-paste divergence, magic strings, dead abstractions). All findings fixed and verified:
+
+### 23. Partial writes bypassed payload-size cap and operation-id replay
+- **Where:** `src/statebreak/world.py`
+- **What:** `partial_update_entity` duplicated ~70% of `update_entity` but skipped the
+  64 KB `MAX_PAYLOAD_SIZE` guard and the idempotent `operation_id` replay path. The
+  copies had already diverged.
+- **Fix:** single `_apply_mutation()` core under both public mutators (field filter +
+  effect status as parameters). Public signatures unchanged.
+
+### 24. Speculative / dead public API removed
+- **Where:** across `clock.py`, `world.py`, `coordination.py`, `convergence.py`,
+  `adapter.py`, `runner.py`, `oracle.py`
+- **What:** `VirtualClock.compare`, `LocalWorld.commit_effect_with_ambiguous_response`
+  (duplicated the `timeout_after_commit` fault), `LocalWorld.snapshot` +
+  `ConvergenceTracker.apply_authoritative_snapshot` (dead pair inventing an unused
+  aggregate version scheme), `ConvergenceTracker.reconcile` (bypassed fault hooks),
+  `ConvergenceTracker.convergence_status`, `MessageQueue.peek/pending_count/
+  duplicate_message/drop_message/reorder_messages` (network-fault simulators nothing
+  wired up ever called), `ToolRequest` (constructed nowhere despite `__all__`),
+  `ScenarioRunner.run_scenarios`.
+- **Fix:** deleted; tests converted to kept paths (e.g. reconciliation now goes through
+  `gateway.read`, which is what production adapters do).
+
+### 25. Registry violated by its own consumers
+- **Where:** `registry.py` vs `coordination.py`, `adapter.py`, `runner.py`, `cli.py`,
+  `metrics.py`, `faults.py`, `oracle.py`
+- **What:** `MessageQueue` defaulted to a *contradicting* two-node topology;
+  `run_default`/`node-01`/seed defaults were duplicated; `-drift` suffix, handoff field
+  names, adapter alias ladder, severity sort key, and every fault/claim name in metrics
+  lived as literals outside the declared "single source of truth".
+- **Fix:** new registry constants (`DEFAULT_NODE_ID(S)`, `DEFAULT_RUN_ID`,
+  `BROADCAST_RECIPIENT`, `WRONG_TARGET_SUFFIX`, `DEFAULT_HANDOFF_TRUNCATED_FIELDS`,
+  `ADAPTER_*` + `VALID_ADAPTER_NAMES`, `SEVERITY_ORDER` + shared `sort_findings`);
+  all consumers import them.
+
+### 26. Oracle engine hardening and decomposition
+- **Where:** `src/statebreak/oracle.py`
+- **What:** 265-line `_eval_claim_requires_state` repeated eight structurally identical
+  fault-invariant blocks; `state_equals`/`state_not_equals` silently defaulted their
+  target to demo entity `order-001` (vacuous pass); unknown-oracle-type finding risk.
+- **Fix:** data-driven invariant rows + `_finding()` builder; missing `params.target`
+  now raises `ConfigurationError` at evaluation; non-blocking semantics of the
+  unsupported-oracle finding preserved; indentation scar fixed.
+
+### 27. Misc honesty fixes
+- Skipped fault events report true trigger counts instead of a padded `1`
+  (`faults.py`); secret scan recurses into nested entity values with dotted-path
+  errors (`world.py`); speculative scheduler `seed` removed from `FaultScheduler` +
+  `FaultEvent`; `AdapterContext` seams typed via `TYPE_CHECKING` instead of `Any`;
+  defensive `hasattr` clock fallback dropped; topology parsing moved to
+  `Scenario.node_ids`.
+
+### 28. Terminal color layer + smoother CLI output
+- **Where:** new `src/statebreak/colors.py`, `report.py`, `cli.py`
+- **What:** verdicts, severities, event/effect statuses, validate marks, and list fault
+  tags are now colored on TTYs; piped output stays plain; `NO_COLOR` /
+  `FORCE_COLOR` / `--no-color` respected; JSON/SARIF never colored.
+- **Fix:** conservative ANSI palette (red fail/applied/critical, green pass/committed,
+  yellow needs_review/unknown/partial); markdown renderer gained a `color=` flag.
+
+**Verification after pass 4:** `make check` exit 0 (ruff clean, mypy clean over 24
+files, 165 passed; count down from 173 because eight tests only exercised deleted
+APIs). All 6 bundled scenarios re-run via CLI against both reference adapters:
+naive fails all six, guarded passes or escalates to `needs_review`, matching each
+scenario's expectations block. Net diff −351 lines before pass 4 additions.

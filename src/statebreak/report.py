@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
+from statebreak.colors import severity_text, status_text, verdict_text
 from statebreak.models import EffectRecord, Finding, RunReport
+
+
+def _plain(text: str) -> str:
+    return text
 
 
 def _report_to_dict(report: RunReport) -> dict[str, Any]:
@@ -43,8 +49,21 @@ def render_json(report: RunReport, indent: int = 2) -> str:
     return json.dumps(data, indent=indent, sort_keys=True)
 
 
-def render_markdown(report: RunReport) -> str:
-    """Render RunReport as formatted Markdown document."""
+def render_markdown(report: RunReport, *, color: bool = False) -> str:
+    """Render RunReport as a formatted Markdown document.
+
+    ``color=True`` decorates verdicts, severities, and statuses with terminal
+    colors (auto-disabled when the sink is not a color-capable TTY).
+    """
+    if color:
+        verdict = verdict_text(report.verdict)
+        paint_sev: Callable[[str], str] = severity_text
+        paint_status: Callable[[str], str] = status_text
+    else:
+        verdict = report.verdict.upper()
+        paint_sev = _plain
+        paint_status = _plain
+
     lines: list[str] = [
         f"# StateBreak Run Report: `{report.scenario_id}`",
         "",
@@ -54,7 +73,7 @@ def render_markdown(report: RunReport) -> str:
         "|---|---|",
         f"| **Run ID** | `{report.run_id}` |",
         f"| **Scenario ID** | `{report.scenario_id}` |",
-        f"| **Verdict** | **`{report.verdict.upper()}`** |",
+        f"| **Verdict** | **{verdict}** |",
         (
             f"| **Adapter** | `{report.adapter.get('name', 'unknown')} "
             f"v{report.adapter.get('version', '')}` |"
@@ -96,7 +115,7 @@ def render_markdown(report: RunReport) -> str:
             is_blk = f.blocking if isinstance(f, Finding) else f.get("blocking", False)
             blk = "Yes" if is_blk else "No"
             rem = f.remediation if isinstance(f, Finding) else f.get("remediation", "")
-            lines.append(f"| `{f_id}` | `{sev}` | `{cat}` | {blk} | {rem} |")
+            lines.append(f"| `{f_id}` | `{paint_sev(str(sev))}` | `{cat}` | {blk} | {rem} |")
         lines.append("")
 
     # Timeline Section
@@ -107,9 +126,10 @@ def render_markdown(report: RunReport) -> str:
         "|---|---|---|---|",
     ])
     for ev in report.events:
+        ev_status = paint_status(str(ev.get("status", "")))
         lines.append(
             f"| `{ev.get('event_id', '')}` | Fault: `{ev.get('fault_type', '')}` | "
-            f"`{ev.get('target_entity_id', '-')}` | `{ev.get('status', '')}` |"
+            f"`{ev.get('target_entity_id', '-')}` | {ev_status} |"
         )
     for eff in report.effects:
         if isinstance(eff, EffectRecord):
@@ -119,7 +139,9 @@ def render_markdown(report: RunReport) -> str:
             kind = eff.get("kind", "")
             target = eff.get("target", "")
             status = eff.get("status", "")
-        lines.append(f"| `{eff_id}` | Effect: `{kind}` | `{target}` | `{status}` |")
+        lines.append(
+            f"| `{eff_id}` | Effect: `{kind}` | `{target}` | {paint_status(str(status))} |"
+        )
     lines.append("")
 
     # Diagnostic section

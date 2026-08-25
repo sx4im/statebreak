@@ -81,17 +81,6 @@ def test_clock_expiry_boundary() -> None:
     assert clock.is_expired(expiry)
 
 
-def test_clock_compare() -> None:
-    clock = VirtualClock("2026-01-01T09:00:00Z")
-    target = "2026-01-01T09:00:30Z"
-
-    assert clock.compare(target) == -1
-    clock.advance(30)
-    assert clock.compare(target) == 0
-    clock.advance(1)
-    assert clock.compare(target) == 1
-
-
 def test_clock_rejection_negative_and_invalid() -> None:
     clock = VirtualClock("2026-01-01T09:00:00Z")
 

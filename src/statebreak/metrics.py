@@ -4,6 +4,16 @@ from __future__ import annotations
 
 from statebreak.models import Scenario
 from statebreak.oracle import OracleContext, OracleEvaluationResult
+from statebreak.registry import (
+    CLAIM_RECONCILED,
+    CLAIM_STALE_DETECTED,
+    CLAIM_TASK_COMMITTED,
+    CLAIM_TASK_COMPLETED,
+    FAULT_HANDOFF_TRUNCATION,
+    FAULT_PARTIAL_WRITE,
+    FAULT_STALE_READ,
+    FAULT_TIMEOUT_AFTER_COMMIT,
+)
 
 
 def calculate_scenario_metrics(
@@ -45,7 +55,9 @@ def calculate_scenario_metrics(
     unsafe_success_count = 0
     for _, res, ctx in evaluations:
         claims = {c.name: c.value for c in ctx.adapter_result.claims}
-        claimed = claims.get("task_completed", False) or claims.get("task_committed", False)
+        claimed = (
+            claims.get(CLAIM_TASK_COMPLETED, False) or claims.get(CLAIM_TASK_COMMITTED, False)
+        )
         if claimed and res.verdict == "fail":
             unsafe_success_count += 1
 
@@ -55,11 +67,11 @@ def calculate_scenario_metrics(
     stale_injected_runs = 0
     stale_detected_runs = 0
     for _, res, ctx in evaluations:
-        has_stale_fault = any(f.fault_type == "stale_read" for f in ctx.fault_events)
+        has_stale_fault = any(f.fault_type == FAULT_STALE_READ for f in ctx.fault_events)
         if has_stale_fault:
             stale_injected_runs += 1
             claims = {c.name: c.value for c in ctx.adapter_result.claims}
-            if claims.get("stale_detected", False) or ctx.adapter_result.status == "needs_review":
+            if claims.get(CLAIM_STALE_DETECTED, False) or ctx.adapter_result.status == "needs_review":
                 stale_detected_runs += 1
 
     stale_detection_rate = (
@@ -84,14 +96,14 @@ def calculate_scenario_metrics(
     safely_recovered_runs = 0
     for _, res, ctx in evaluations:
         has_ambiguity = any(
-            f.fault_type in ("timeout_after_commit", "partial_write", "handoff_truncation")
+            f.fault_type in (FAULT_TIMEOUT_AFTER_COMMIT, FAULT_PARTIAL_WRITE, FAULT_HANDOFF_TRUNCATION)
             for f in ctx.fault_events
         )
         if has_ambiguity:
             ambiguous_runs += 1
             claims = {c.name: c.value for c in ctx.adapter_result.claims}
             # Safely recovered if reconciled or explicitly escalated to needs_review
-            if res.verdict == "pass" and claims.get("reconciled", False) or res.verdict == "needs_review":
+            if res.verdict == "pass" and claims.get(CLAIM_RECONCILED, False) or res.verdict == "needs_review":
                 safely_recovered_runs += 1
 
     safe_recovery_rate = (

@@ -19,9 +19,32 @@ from statebreak.gateway import ToolGateway
 from statebreak.metrics import calculate_scenario_metrics
 from statebreak.models import Finding, RunReport, Scenario
 from statebreak.oracle import OracleContext, OracleEngine, OracleEvaluationResult
-from statebreak.registry import DEFAULT_NODE_IDS
+from statebreak.registry import (
+    ADAPTER_GUARDED,
+    ADAPTER_MULTI_NODE,
+    ADAPTER_NAIVE,
+    DEFAULT_NODE_ID,
+    VALID_ADAPTER_NAMES,
+    sort_findings,
+)
 from statebreak.scenario import load_scenario
 from statebreak.world import LocalWorld
+
+#: Canonical adapter name -> implementation. Registry-owned vocabulary; a new
+#: reference adapter registers here (plus in ``registry.ADAPTER_*``).
+_ADAPTER_IMPLEMENTATIONS: dict[str, type[AgentAdapter]] = {
+    ADAPTER_GUARDED: GuardedAdapter,
+    ADAPTER_NAIVE: NaiveAdapter,
+    ADAPTER_MULTI_NODE: MultiNodeAdapter,
+}
+
+
+def _normalize_adapter_name(adapter_spec: str) -> str:
+    """Normalize an adapter alias to its canonical registry name."""
+    name = adapter_spec.lower().strip().replace("-", "_")
+    if name.endswith("_adapter"):
+        name = name.removesuffix("_adapter")
+    return name
 
 
 class ScenarioRunner:
@@ -38,25 +61,22 @@ class ScenarioRunner:
         if not isinstance(adapter_spec, str):
             raise UsageError(f"invalid adapter specification: {adapter_spec}")
 
-        name = adapter_spec.lower().strip()
-        if name in ("guarded", "guarded-adapter"):
-            return GuardedAdapter()
-        elif name in ("naive", "naive-adapter"):
-            return NaiveAdapter()
-        elif name in ("multi_node", "multi-node", "multi-node-adapter"):
-            return MultiNodeAdapter()
-        else:
+        name = _normalize_adapter_name(adapter_spec)
+        adapter_cls = _ADAPTER_IMPLEMENTATIONS.get(name)
+        if adapter_cls is None:
             raise UsageError(
-                f"unknown adapter '{adapter_spec}'. Supported: 'guarded', 'naive', 'multi_node'"
+                f"unknown adapter '{adapter_spec}'. "
+                f"Supported: {sorted(VALID_ADAPTER_NAMES)}"
             )
+        return adapter_cls()
 
     def run_scenario(
         self,
         scenario_input: str | Path | Scenario,
-        adapter: str | AgentAdapter = "guarded",
+        adapter: str | AgentAdapter = ADAPTER_GUARDED,
         seed: int | None = None,
         run_id: str | None = None,
-        node_id: str = "node-01",
+        node_id: str = DEFAULT_NODE_ID,
     ) -> RunReport:
         """Execute a single scenario end-to-end and return standardized RunReport."""
         # 1. Load scenario if path provided
@@ -79,13 +99,9 @@ class ScenarioRunner:
             step_seconds=scenario.clock.step_seconds,
         )
         world = LocalWorld(scenario.world)
-        fault_scheduler = FaultScheduler(scenario.faults, seed=effective_seed)
+        fault_scheduler = FaultScheduler(scenario.faults)
 
-        # Node topology: scenarios may declare world.nodes; fall back to default.
-        raw_nodes = scenario.world.get("nodes")
-        node_ids: tuple[str, ...] = (
-            tuple(str(n) for n in raw_nodes) if isinstance(raw_nodes, list) and raw_nodes else DEFAULT_NODE_IDS
-        )
+        node_ids = scenario.node_ids
         queue = MessageQueue(
             nodes=list(node_ids),
             run_id=effective_run_id,
@@ -196,32 +212,8 @@ class ScenarioRunner:
             scenario_id=scenario.id,
             fault_refs=(),
         )
-        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-        findings = tuple(
-            sorted(
-                (*result.findings, finding),
-                key=lambda f: (
-                    0 if f.blocking else 1,
-                    severity_order.get(f.severity, 99),
-                    f.finding_id,
-                ),
-            )
-        )
         return OracleEvaluationResult(
             verdict="fail",
-            findings=findings,
+            findings=sort_findings((*result.findings, finding)),
             oracle_results=result.oracle_results,
         )
-
-    def run_scenarios(
-        self,
-        scenario_paths: list[str | Path],
-        adapter: str | AgentAdapter = "guarded",
-        seed: int | None = None,
-    ) -> list[RunReport]:
-        """Execute multiple scenarios sequentially and return list of reports."""
-        reports: list[RunReport] = []
-        for p in scenario_paths:
-            rep = self.run_scenario(p, adapter=adapter, seed=seed)
-            reports.append(rep)
-        return reports

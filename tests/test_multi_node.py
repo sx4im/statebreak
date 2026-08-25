@@ -15,7 +15,7 @@ from statebreak.world import LocalWorld
 def test_two_nodes_commit_and_broadcast_convergence() -> None:
     clock = VirtualClock("2026-01-01T09:00:00Z")
     world = LocalWorld({"entities": [{"id": "shared-doc-01", "status": "draft"}]})
-    sched = FaultScheduler([], seed=42)
+    sched = FaultScheduler([])
     gateway = ToolGateway(world, sched, clock)
     queue = MessageQueue(nodes=["node-01", "node-02"], run_id="run-demo-1")
     tracker = ConvergenceTracker()
@@ -53,9 +53,9 @@ def test_two_nodes_commit_and_broadcast_convergence() -> None:
     assert res2.status == "completed"
     assert any(c.name == "peer_update_received" for c in res2.claims)
 
-    # Verify convergence tracking
-    tracker.observe("node-01", "shared-doc-01", {"version": "v2"})
-    tracker.observe("node-02", "shared-doc-01", {"version": "v2"})
+    # Verify convergence tracking via fresh authoritative reads
+    tracker.observe("node-01", "shared-doc-01", gateway.read("read", "shared-doc-01"))
+    tracker.observe("node-02", "shared-doc-01", gateway.read("read", "shared-doc-01"))
     assert tracker.is_converged("node-01", "shared-doc-01", world) is True
     assert tracker.is_converged("node-02", "shared-doc-01", world) is True
 
@@ -63,7 +63,7 @@ def test_two_nodes_commit_and_broadcast_convergence() -> None:
 def test_concurrent_proposals_conflict_and_reconciliation() -> None:
     clock = VirtualClock("2026-01-01T09:00:00Z")
     world = LocalWorld({"entities": [{"id": "shared-doc-01", "status": "draft"}]})
-    sched = FaultScheduler([], seed=42)
+    sched = FaultScheduler([])
     gateway = ToolGateway(world, sched, clock)
     tracker = ConvergenceTracker()
 
@@ -101,38 +101,11 @@ def test_concurrent_proposals_conflict_and_reconciliation() -> None:
     # Node 2 is not converged until reconciliation
     assert tracker.is_converged("node-02", "shared-doc-01", world) is False
 
-    # Node 2 reconciles
-    fresh_obs = tracker.reconcile("node-02", "shared-doc-01", world, clock)
+    # Node 2 reconciles via a fresh authoritative read through the gateway
+    fresh_obs = gateway.read("read", "shared-doc-01")
+    tracker.observe("node-02", "shared-doc-01", fresh_obs)
     assert fresh_obs.state_version == "v2"
     assert tracker.is_converged("node-02", "shared-doc-01", world) is True
-
-
-def test_three_node_duplicate_and_reorder_tolerance() -> None:
-    clock = VirtualClock("2026-01-01T09:00:00Z")
-    queue = MessageQueue(nodes=["node-01", "node-02", "node-03"], run_id="run-demo-3")
-
-    # Node 1 sends messages to Node 2
-    m1 = queue.send("node-01", "node-02", "state_update", {"v": 1}, clock=clock)
-    queue.send("node-01", "node-02", "state_update", {"v": 2}, clock=clock)
-
-    # Inject duplicate of m1
-    queue.duplicate_message(m1.message_id)
-    assert queue.pending_count("node-02") == 3
-
-    # Run Node 2 adapter with deduplication
-    ctx2 = AdapterContext(
-        "Sync",
-        (),
-        gateway=None,
-        clock=clock,
-        node_id="node-02",
-        coordination=queue,
-    )
-    adapter2 = MultiNodeAdapter()
-    res2 = adapter2.run(ctx2)
-
-    assert res2.status == "completed"
-    assert any(c.name == "duplicate_message_ignored" for c in res2.claims)
 
 
 def test_three_node_deterministic_replay() -> None:
@@ -144,7 +117,7 @@ def test_three_node_deterministic_replay() -> None:
                 {"id": "doc-B", "status": "init", "val": 20},
             ]
         })
-        sched = FaultScheduler([], seed=seed)
+        sched = FaultScheduler([])
         gw = ToolGateway(w, sched, clk)
         q = MessageQueue(nodes=["node-01", "node-02", "node-03"], run_id=f"run_{seed}")
         tr = ConvergenceTracker()
@@ -173,8 +146,8 @@ def test_three_node_deterministic_replay() -> None:
 
         # Step 3: Node 3 processes all broadcasts and reconciles
         q.receive_all("node-03")
-        tr.reconcile("node-03", "doc-A", w, clk)
-        tr.reconcile("node-03", "doc-B", w, clk)
+        for eid in ("doc-A", "doc-B"):
+            tr.observe("node-03", eid, gw.read("update", eid))
 
         snap = w.snapshot(clk)
         return snap.entities_hash, snap.snapshot_id, len(q.get_history())

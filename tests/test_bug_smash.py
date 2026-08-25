@@ -271,7 +271,6 @@ def test_bug10_before_read_fault_is_skipped_not_applied() -> None:
 
     scheduler = FaultScheduler(
         (FaultSpec(id="br", at="before_read", type="stale_read", target="e1"),),
-        seed=1,
     )
     clock = VirtualClock("2026-01-01T09:00:00Z")
     world = LocalWorld({"entities": [{"id": "e1", "status": "pending"}]})
@@ -347,7 +346,6 @@ def test_bug14_expiry_advance_goes_past_declared_expires_at() -> None:
 
     scheduler = FaultScheduler(
         (FaultSpec(id="exp", at="before_commit", type="approval_expired", target="appr-1"),),
-        seed=1,
     )
     scheduler.before_commit(
         target="appr-1", operation_id="op_x", payload={}, world=world, clock=clock

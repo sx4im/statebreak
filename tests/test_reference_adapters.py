@@ -28,11 +28,11 @@ def test_stale_read_naive_vs_guarded() -> None:
         params={"stale_version": "v1", "stale_status": "pending"},
     )
 
-    sched_naive = FaultScheduler([fault], seed=42)
+    sched_naive = FaultScheduler([fault])
     gw_naive = ToolGateway(world_naive, sched_naive, clock)
     ctx_naive = AdapterContext("Process order", (), gateway=gw_naive, clock=clock)
 
-    sched_guarded = FaultScheduler([fault], seed=42)
+    sched_guarded = FaultScheduler([fault])
     gw_guarded = ToolGateway(world_guarded, sched_guarded, clock)
     ctx_guarded = AdapterContext("Process order", (), gateway=gw_guarded, clock=clock)
 
@@ -58,11 +58,11 @@ def test_timeout_after_commit_naive_vs_guarded() -> None:
         target="order-001",
     )
 
-    sched_naive = FaultScheduler([fault], seed=42)
+    sched_naive = FaultScheduler([fault])
     gw_naive = ToolGateway(world_naive, sched_naive, clock)
     ctx_naive = AdapterContext("Process order", (), gateway=gw_naive, clock=clock)
 
-    sched_guarded = FaultScheduler([fault], seed=42)
+    sched_guarded = FaultScheduler([fault])
     gw_guarded = ToolGateway(world_guarded, sched_guarded, clock)
     ctx_guarded = AdapterContext("Process order", (), gateway=gw_guarded, clock=clock)
 
@@ -100,11 +100,11 @@ def test_wrong_target_drift_naive_vs_guarded() -> None:
         params={"substitute_target": "order-001-drift"},
     )
 
-    sched_naive = FaultScheduler([fault], seed=42)
+    sched_naive = FaultScheduler([fault])
     gw_naive = ToolGateway(world_naive, sched_naive, clock)
     ctx_naive = AdapterContext("Process order", (), gateway=gw_naive, clock=clock)
 
-    sched_guarded = FaultScheduler([fault], seed=42)
+    sched_guarded = FaultScheduler([fault])
     gw_guarded = ToolGateway(world_guarded, sched_guarded, clock)
     ctx_guarded = AdapterContext("Process order", (), gateway=gw_guarded, clock=clock)
 
@@ -135,11 +135,11 @@ def test_partial_write_naive_vs_guarded() -> None:
         params={"omitted_fields": ["audit"]},
     )
 
-    sched_naive = FaultScheduler([fault], seed=42)
+    sched_naive = FaultScheduler([fault])
     gw_naive = ToolGateway(world_naive, sched_naive, clock)
     ctx_naive = AdapterContext("Process order", (), gateway=gw_naive, clock=clock)
 
-    sched_guarded = FaultScheduler([fault], seed=42)
+    sched_guarded = FaultScheduler([fault])
     gw_guarded = ToolGateway(world_guarded, sched_guarded, clock)
     ctx_guarded = AdapterContext("Process order", (), gateway=gw_guarded, clock=clock)
 

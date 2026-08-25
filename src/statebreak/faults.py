@@ -10,7 +10,17 @@ from statebreak.canonical import canonical_json, compute_sha256
 from statebreak.clock import VirtualClock, parse_iso_utc
 from statebreak.errors import ConfigurationError
 from statebreak.models import FaultSpec
-from statebreak.registry import VALID_FAULT_TYPES, VALID_LIFECYCLE_POINTS
+from statebreak.registry import (
+    DEFAULT_HANDOFF_TRUNCATED_FIELDS,
+    FAULT_APPROVAL_EXPIRED,
+    FAULT_HANDOFF_TRUNCATION,
+    FAULT_PARTIAL_WRITE,
+    FAULT_TIMEOUT_AFTER_COMMIT,
+    FAULT_WRONG_TARGET,
+    VALID_FAULT_TYPES,
+    VALID_LIFECYCLE_POINTS,
+    WRONG_TARGET_SUFFIX,
+)
 from statebreak.world import LocalWorld, MutationResult
 
 
@@ -28,13 +38,11 @@ class FaultEvent:
     before_hash: str | None = None
     after_hash: str | None = None
     trigger_count: int = 1
-    seed: int = 42
     status: str = "applied"  # applied, skipped, rejected
     reason: str = ""
     details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert fault event to dictionary."""
         return asdict(self)
 
 
@@ -52,19 +60,13 @@ class FaultDispatchResult:
 
 
 class FaultScheduler:
-    """Deterministic, declarative fault scheduler for scenario lifecycle hooks."""
+    """Deterministic, declarative fault scheduler for scenario lifecycle hooks.
 
-    def __init__(
-        self,
-        faults: tuple[FaultSpec, ...] | list[FaultSpec] = (),
-        seed: int = 42,
-    ) -> None:
-        # ``seed`` is provenance-only today: no scheduler behavior consumes
-        # randomness. Injection is deterministic-by-construction; the seed is
-        # hashed into fault events and reported so runs remain attributable
-        # and replayable. Reserved for future randomized-but-replayable
-        # fault ordering.
-        self._seed = int(seed)
+    Injection is deterministic-by-construction; scenario ``seed`` values remain
+    attributable through run reports rather than the scheduler.
+    """
+
+    def __init__(self, faults: tuple[FaultSpec, ...] | list[FaultSpec] = ()) -> None:
         self._faults: list[FaultSpec] = []
         self._fault_map: dict[str, FaultSpec] = {}
         self._trigger_counts: dict[str, int] = {}
@@ -97,17 +99,10 @@ class FaultScheduler:
             self._fault_map[f.id] = f
             self._trigger_counts[f.id] = 0
 
-    @property
-    def seed(self) -> int:
-        """Return scenario seed."""
-        return self._seed
-
     def get_fault(self, fault_id: str) -> FaultSpec | None:
-        """Lookup a declared fault specification by ID."""
         return self._fault_map.get(fault_id)
 
     def get_events(self) -> tuple[FaultEvent, ...]:
-        """Return all logged fault events."""
         return tuple(self._events)
 
     def reset(self) -> None:
@@ -123,15 +118,13 @@ class FaultScheduler:
         world: LocalWorld | None = None,
     ) -> bool:
         """Check if fault matches target and has remaining repeat allowance."""
-        # If target specified on fault, it must match or be a known approval entity in world
         if fault.target is not None and target is not None and fault.target != target:
-            if (
-                fault.type == "approval_expired"
+            target_exempt = (
+                fault.type == FAULT_APPROVAL_EXPIRED
                 and world is not None
                 and world.has_entity(fault.target)
-            ):
-                pass
-            else:
+            )
+            if not target_exempt:
                 return False
 
         max_repeats = fault.repeat if fault.repeat is not None else 1
@@ -150,12 +143,17 @@ class FaultScheduler:
         after_hash: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> FaultEvent:
-        """Generate a deterministic fault event and append to the event log."""
-        count = self._trigger_counts.get(fault.id, 0) + (1 if status == "applied" else 0)
-        if status == "applied":
-            self._trigger_counts[fault.id] = count
+        """Generate a deterministic fault event and append to the event log.
 
-        event_id = f"evt_fault_{fault.id}_{max(count, 1)}"
+        Applied events consume repeat allowance and carry the post-increment
+        trigger count; skipped events report the count already consumed.
+        """
+        current_count = self._trigger_counts.get(fault.id, 0)
+        if status == "applied":
+            current_count += 1
+            self._trigger_counts[fault.id] = current_count
+
+        event_id = f"evt_fault_{fault.id}_{current_count}"
         evt = FaultEvent(
             event_id=event_id,
             fault_id=fault.id,
@@ -166,8 +164,7 @@ class FaultScheduler:
             operation_id=operation_id,
             before_hash=before_hash,
             after_hash=after_hash,
-            trigger_count=max(count, 1),
-            seed=self._seed,
+            trigger_count=current_count,
             status=status,
             reason=reason,
             details=copy.deepcopy(details) if details else {},
@@ -259,7 +256,7 @@ class FaultScheduler:
         """Dispatch before_commit lifecycle point (e.g. approval_expired, wrong_target)."""
         for f in self._faults:
             if f.at == "before_commit" and self._should_trigger(f, target, world=world):
-                if f.type == "approval_expired":
+                if f.type == FAULT_APPROVAL_EXPIRED:
                     # Expire the approval entity in world or advance clock
                     appr_target = f.target or target
                     appr_ent = world.get_entity(appr_target)
@@ -297,8 +294,10 @@ class FaultScheduler:
                     )
                     return FaultDispatchResult(applied=True, fault_id=f.id, event=evt)
 
-                elif f.type == "wrong_target":
-                    substitute = f.params.get("substitute_target", f"{target}-drift")
+                elif f.type == FAULT_WRONG_TARGET:
+                    substitute = f.params.get(
+                        "substitute_target", f"{target}{WRONG_TARGET_SUFFIX}"
+                    )
                     evt = self._record_event(
                         fault=f,
                         clock=clock,
@@ -328,7 +327,7 @@ class FaultScheduler:
         """Dispatch after_commit_before_response (e.g. timeout_after_commit, partial_write)."""
         for f in self._faults:
             if f.at == "after_commit_before_response" and self._should_trigger(f, target):
-                if f.type == "timeout_after_commit":
+                if f.type == FAULT_TIMEOUT_AFTER_COMMIT:
                     # Obscure return status to unknown while authoritative state remains committed
                     modified_res = MutationResult(
                         success=True,
@@ -358,7 +357,7 @@ class FaultScheduler:
                         modified_result=modified_res,
                     )
 
-                elif f.type == "partial_write":
+                elif f.type == FAULT_PARTIAL_WRITE:
                     applied_fields = tuple(f.params.get("applied_fields", ["status"]))
                     omitted_fields = tuple(f.params.get("omitted_fields", ["extra_field"]))
                     modified_res = MutationResult(
@@ -426,7 +425,7 @@ class FaultScheduler:
         for f in self._faults:
             if (
                 f.at == "handoff_emit"
-                and f.type == "handoff_truncation"
+                and f.type == FAULT_HANDOFF_TRUNCATION
                 and self._should_trigger(f)
             ):
                 before_json = canonical_json(payload)
@@ -435,7 +434,7 @@ class FaultScheduler:
                 truncated_payload = copy.deepcopy(payload)
                 truncated_keys = f.params.get(
                     "truncated_fields",
-                    ["constraints", "context", "history"],
+                    list(DEFAULT_HANDOFF_TRUNCATED_FIELDS),
                 )
                 omitted: list[str] = []
                 for k in truncated_keys:
